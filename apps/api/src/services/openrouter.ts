@@ -16,6 +16,13 @@ export type OpenRouterStreamResult = {
   usage?: OpenRouterUsage;
 };
 
+export type OpenRouterReasoning = {
+  effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  max_tokens?: number;
+  enabled?: boolean;
+  exclude?: boolean;
+};
+
 export type OpenRouterClientOptions = {
   apiKey: string;
   appUrl?: string;
@@ -25,7 +32,8 @@ export type OpenRouterClientOptions = {
 export type StreamChatInput = {
   model: string;
   messages: OpenRouterMessage[];
-  thinkingLevel?: 'low' | 'medium' | 'high' | 'xhigh' | null;
+  reasoning?: OpenRouterReasoning | null;
+  maxTokens?: number;
   signal?: AbortSignal;
 };
 
@@ -48,9 +56,11 @@ export class OpenRouterClient {
       streamOptions: { includeUsage: true },
     };
 
-    if (input.thinkingLevel) {
-      const effort = input.thinkingLevel === 'xhigh' ? 'high' : input.thinkingLevel;
-      body.reasoning = { effort };
+    if (input.reasoning) {
+      body.reasoning = input.reasoning;
+    }
+    if (input.maxTokens) {
+      body.max_tokens = input.maxTokens;
     }
 
     const headers: Record<string, string> = {

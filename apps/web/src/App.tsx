@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   createThread,
   deleteThread,
@@ -15,6 +17,78 @@ import './App.css';
 
 type Theme = 'light' | 'dark';
 type ViewMode = 'chat' | 'settings';
+type ThinkingLevel = 'low' | 'medium' | 'high';
+type ThinkingSelection = ThinkingLevel | null;
+
+type ThinkingProfile =
+  | { mode: 'none' }
+  | { mode: 'toggle' }
+  | { mode: 'effort' }
+  | { mode: 'budget' };
+
+type ThinkingOption = {
+  value: ThinkingSelection;
+  label: string;
+};
+
+const CLAUDE_THINKING_BUDGETS: Record<ThinkingLevel, number> = {
+  low: 8192,
+  medium: 16384,
+  high: 32768,
+};
+
+const MODEL_THINKING_PROFILES: Record<string, ThinkingProfile> = {
+  'openai/gpt-5.2': { mode: 'effort' },
+  'x-ai/grok-4.1-fast': { mode: 'effort' },
+  'anthropic/claude-opus-4.5': { mode: 'budget' },
+  'anthropic/claude-sonnet-4.5': { mode: 'budget' },
+  'google/gemini-3-pro-preview': { mode: 'none' },
+};
+
+const formatBudgetLabel = (tokens: number) => `${Math.round(tokens / 1024)}k`;
+
+const getThinkingOptions = (model: ModelInfo | null): ThinkingOption[] => {
+  if (!model) {
+    return [{ value: null, label: 'Thinking: Off' }];
+  }
+  const profile =
+    MODEL_THINKING_PROFILES[model.id] ??
+    (model.supportsThinkingLevels ? { mode: 'effort' } : { mode: 'none' });
+  if (profile.mode === 'none') {
+    return [{ value: null, label: 'Thinking: Off' }];
+  }
+  if (profile.mode === 'toggle') {
+    return [
+      { value: null, label: 'Thinking: Off' },
+      { value: 'low', label: 'Thinking: On' },
+    ];
+  }
+  if (profile.mode === 'budget') {
+    return [
+      { value: null, label: 'Thinking: Off' },
+      {
+        value: 'low',
+        label: `Thinking: Low (${formatBudgetLabel(CLAUDE_THINKING_BUDGETS.low)})`,
+      },
+      {
+        value: 'medium',
+        label: `Thinking: Medium (${formatBudgetLabel(CLAUDE_THINKING_BUDGETS.medium)})`,
+      },
+      {
+        value: 'high',
+        label: `Thinking: High (${formatBudgetLabel(CLAUDE_THINKING_BUDGETS.high)})`,
+      },
+    ];
+  }
+  return [
+    { value: null, label: 'Thinking: Off' },
+    { value: 'low', label: 'Thinking: Low' },
+    { value: 'medium', label: 'Thinking: Medium' },
+    { value: 'high', label: 'Thinking: High' },
+  ];
+};
+
+const normalizeModelText = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 const formatCost = (value: number | null | undefined) => {
   const amount = value ?? 0;
@@ -39,7 +113,7 @@ export default function App() {
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string>('');
-  const [thinkingLevel, setThinkingLevel] = useState<'low' | 'medium' | 'high' | 'xhigh'>('medium');
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingSelection>('medium');
   const [composer, setComposer] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [systemPrompt, setSystemPrompt] = useState('');
@@ -61,6 +135,34 @@ export default function App() {
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId) || null;
   const selectedModel = models.find((model) => model.id === selectedModelId) || null;
+  const thinkingOptions = useMemo(() => getThinkingOptions(selectedModel), [selectedModel]);
+  const slashQuery = useMemo(() => {
+    const trimmed = composer.trimStart();
+    if (!trimmed.startsWith('/')) return null;
+    if (composer.includes('\n')) return null;
+    return trimmed.slice(1);
+  }, [composer]);
+  const modelSuggestions = useMemo(() => {
+    if (slashQuery === null) return [];
+    const query = normalizeModelText(slashQuery.trim());
+    const ranked = models
+      .map((model) => {
+        const labelKey = normalizeModelText(model.label);
+        const idKey = normalizeModelText(model.id);
+        if (!query) return { model, score: 0 };
+        if (labelKey.startsWith(query) || idKey.startsWith(query)) {
+          return { model, score: 0 };
+        }
+        if (labelKey.includes(query) || idKey.includes(query)) {
+          return { model, score: 1 };
+        }
+        return { model, score: 2 };
+      })
+      .filter((entry) => query === '' || entry.score < 2)
+      .sort((a, b) => a.score - b.score || a.model.label.localeCompare(b.model.label));
+    return ranked.map((entry) => entry.model).slice(0, 6);
+  }, [models, slashQuery]);
+  const slashCommandActive = slashQuery !== null;
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -120,15 +222,33 @@ export default function App() {
     el.style.height = `${el.scrollHeight}px`;
   }, [composer]);
 
+  useEffect(() => {
+    if (!thinkingOptions.some((option) => option.value === thinkingLevel)) {
+      setThinkingLevel(thinkingOptions[0]?.value ?? null);
+    }
+  }, [thinkingOptions, thinkingLevel]);
+
+
   const chatTotalCost = useMemo(() => activeThread?.totalCost ?? 0, [activeThread]);
 
-  const handleNewThread = async () => {
+  const handleNewThread = useCallback(async () => {
     const thread = await createThread(null);
     setThreads((prev) => [thread, ...prev]);
     setActiveThreadId(thread.id);
     setActiveView('chat');
     setMessages([]);
-  };
+  }, []);
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() === 'o' && event.metaKey && event.shiftKey) {
+        event.preventDefault();
+        handleNewThread();
+      }
+    };
+    window.addEventListener('keydown', handleShortcut);
+    return () => window.removeEventListener('keydown', handleShortcut);
+  }, [handleNewThread]);
 
   const handleDeleteThread = async (threadId: string) => {
     await deleteThread(threadId);
@@ -152,6 +272,15 @@ export default function App() {
     }
     const uploaded = await uploadFiles(threadId, fileList);
     setAttachments((prev) => [...prev, ...uploaded]);
+  };
+
+  const handleSelectModel = (modelId: string) => {
+    setSelectedModelId(modelId);
+    setComposer('');
+    if (composerRef.current) {
+      composerRef.current.focus();
+      composerRef.current.style.height = 'auto';
+    }
   };
 
   const handleSend = async () => {
@@ -179,7 +308,7 @@ export default function App() {
       role: 'user',
       content,
       modelId: selectedModelId,
-      thinkingLevel,
+      thinkingLevel: thinkingLevel ?? null,
       createdAt: new Date().toISOString(),
       attachments,
     };
@@ -212,7 +341,7 @@ export default function App() {
           threadId,
           content,
           modelId: selectedModelId,
-          thinkingLevel: selectedModel?.supportsThinkingLevels ? thinkingLevel : null,
+          thinkingLevel: thinkingLevel ?? null,
           attachmentIds: attachments.map((a) => a.id),
         },
         {
@@ -270,6 +399,10 @@ export default function App() {
   const handleComposerKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
+      if (slashCommandActive && modelSuggestions.length > 0) {
+        handleSelectModel(modelSuggestions[0].id);
+        return;
+      }
       handleSend();
     }
   };
@@ -281,7 +414,10 @@ export default function App() {
 
   return (
     <div className={`app ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
-      <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+      <aside
+        className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}
+        aria-hidden={sidebarCollapsed}
+      >
         <div className="sidebar-top">
           <div className="brand">{sidebarCollapsed ? 'pc' : 'pro-chat'}</div>
           <button
@@ -334,9 +470,22 @@ export default function App() {
         {activeView === 'chat' ? (
           <>
             <header className="chat-header">
-              <div>
-                <div className="chat-title">{activeThread?.title ?? 'New chat'}</div>
-                <div className="chat-subtitle">Per-message model selection · Streaming enabled</div>
+              <div className="chat-heading">
+                {sidebarCollapsed && (
+                  <button
+                    className="icon-button sidebar-toggle"
+                    onClick={() => setSidebarCollapsed(false)}
+                    aria-label="Show sidebar"
+                  >
+                    ☰
+                  </button>
+                )}
+                <div>
+                  <div className="chat-title">{activeThread?.title ?? 'New chat'}</div>
+                  <div className="chat-subtitle">
+                    Per-message model selection · Streaming enabled
+                  </div>
+                </div>
               </div>
               <div className="chat-meta">
                 <span className="cost-chip">Chat total {formatCost(chatTotalCost)}</span>
@@ -361,7 +510,15 @@ export default function App() {
                     {message.role === 'user' ? 'You' : 'Assistant'}
                   </div>
                   <div className="message-content">
-                    {message.content || (message.status === 'streaming' ? 'Thinking…' : '')}
+                    {message.role === 'assistant' ? (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {message.content || (message.status === 'streaming' ? 'Thinking…' : '')}
+                      </ReactMarkdown>
+                    ) : (
+                      <span>
+                        {message.content || (message.status === 'streaming' ? 'Thinking…' : '')}
+                      </span>
+                    )}
                   </div>
                   {message.attachments && message.attachments.length > 0 && (
                     <div className="attachments">
@@ -419,6 +576,25 @@ export default function App() {
                 placeholder="Type your message..."
                 rows={1}
               />
+              {slashCommandActive && modelSuggestions.length > 0 && (
+                <div className="composer-suggestions">
+                  <div className="composer-suggestion-hint">Select a model</div>
+                  {modelSuggestions.map((model, index) => (
+                    <button
+                      key={model.id}
+                      type="button"
+                      className={`composer-suggestion ${index === 0 ? 'active' : ''}`}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        handleSelectModel(model.id);
+                      }}
+                    >
+                      <span className="composer-suggestion-label">{model.label}</span>
+                      <span className="composer-suggestion-id">{model.id}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="composer-toolbar">
                 <label className="icon-button attach-button" aria-label="Attach files">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -438,6 +614,7 @@ export default function App() {
                   />
                 </label>
                 <select
+                  aria-label="Model selector"
                   value={selectedModelId}
                   onChange={(event) => setSelectedModelId(event.target.value)}
                 >
@@ -448,16 +625,19 @@ export default function App() {
                   ))}
                 </select>
                 <select
-                  value={thinkingLevel}
+                  aria-label="Thinking selector"
+                  value={thinkingLevel ?? ''}
                   onChange={(event) =>
-                    setThinkingLevel(event.target.value as 'low' | 'medium' | 'high' | 'xhigh')
+                    setThinkingLevel(
+                      (event.target.value || null) as 'low' | 'medium' | 'high' | null,
+                    )
                   }
-                  disabled={!selectedModel?.supportsThinkingLevels}
                 >
-                  <option value="low">Thinking: Low</option>
-                  <option value="medium">Thinking: Medium</option>
-                  <option value="high">Thinking: High</option>
-                  <option value="xhigh">Thinking: X-High</option>
+                  {thinkingOptions.map((option) => (
+                    <option key={option.label} value={option.value ?? ''}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
                 <button className="button primary" onClick={handleSend} disabled={isStreaming}>
                   Send

@@ -2,13 +2,14 @@ import { ChatRepository } from '../repositories/types';
 import { buildUserContent } from '../utils/attachments';
 import { calculateCost } from '../utils/cost';
 import { OpenRouterClient } from './openrouter';
-import { MessageRecord } from '../types';
+import { MessageRecord, ThinkingLevel } from '../types';
+import { resolveThinkingConfig } from '../utils/thinking';
 
 export type SendMessageInput = {
   threadId: string;
   content: string;
   modelId: string;
-  thinkingLevel?: 'low' | 'medium' | 'high' | 'xhigh' | null;
+  thinkingLevel?: ThinkingLevel | null;
   attachmentIds?: string[];
 };
 
@@ -104,11 +105,13 @@ export class ChatService {
     openRouterMessages.push({ role: 'user', content });
 
     const start = Date.now();
+    const { reasoning, maxTokens } = resolveThinkingConfig(model, input.thinkingLevel ?? null);
     const result = await this.openRouter.streamChat(
       {
         model: model.id,
         messages: openRouterMessages,
-        thinkingLevel: model.supportsThinkingLevels ? input.thinkingLevel : null,
+        reasoning,
+        maxTokens,
         signal,
       },
       onDelta,

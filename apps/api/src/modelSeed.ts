@@ -23,7 +23,7 @@ export const MODEL_SEED: ModelInfo[] = [
     inputCostPerToken: 0.000005,
     outputCostPerToken: 0.000025,
     supportsVision: false,
-    supportsThinkingLevels: false,
+    supportsThinkingLevels: true,
   },
   {
     id: 'anthropic/claude-sonnet-4.5',
@@ -31,7 +31,7 @@ export const MODEL_SEED: ModelInfo[] = [
     inputCostPerToken: 0.000003,
     outputCostPerToken: 0.000015,
     supportsVision: false,
-    supportsThinkingLevels: false,
+    supportsThinkingLevels: true,
   },
   {
     id: 'x-ai/grok-4.1-fast',
@@ -39,6 +39,6 @@ export const MODEL_SEED: ModelInfo[] = [
     inputCostPerToken: 0.0000002,
     outputCostPerToken: 0.0000005,
     supportsVision: false,
-    supportsThinkingLevels: false,
+    supportsThinkingLevels: true,
   },
 ];

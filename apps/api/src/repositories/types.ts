@@ -1,4 +1,11 @@
-import { AttachmentRecord, MessageRecord, ModelInfo, ThreadRecord, ThreadSummary } from '../types';
+import {
+  AttachmentRecord,
+  MessageRecord,
+  ModelInfo,
+  ThreadRecord,
+  ThreadSummary,
+  ThinkingLevel,
+} from '../types';
 
 export type SettingsRecord = {
   systemPrompt: string | null;
@@ -13,7 +20,7 @@ export type CreateMessageInput = {
   role: 'user' | 'assistant' | 'system';
   content: string;
   modelId?: string | null;
-  thinkingLevel?: 'low' | 'medium' | 'high' | 'xhigh' | null;
+  thinkingLevel?: ThinkingLevel | null;
   durationMs?: number | null;
   promptTokens?: number | null;
   completionTokens?: number | null;
