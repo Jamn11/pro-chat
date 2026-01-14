@@ -5,9 +5,9 @@ import path from 'path';
 import { buildUserContent } from '../src/utils/attachments';
 import { AttachmentRecord } from '../src/types';
 
-const createTempFile = async (content: string) => {
+const createTempFile = async (content: string, filename: string) => {
   const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pro-chat-'));
-  const filePath = path.join(dir, 'image.png');
+  const filePath = path.join(dir, filename);
   await fs.promises.writeFile(filePath, content);
   return { dir, filePath };
 };
@@ -35,7 +35,7 @@ describe('buildUserContent', () => {
   });
 
   it('builds multi-part content with images when supported', async () => {
-    const { dir, filePath } = await createTempFile('fake');
+    const { dir, filePath } = await createTempFile('fake', 'image.png');
     const attachments: AttachmentRecord[] = [
       {
         id: '1',
@@ -54,5 +54,27 @@ describe('buildUserContent', () => {
     const parts = content as Array<{ type: string }>;
     expect(parts[0].type).toBe('text');
     expect(parts[1].type).toBe('image_url');
+  });
+
+  it('includes text attachment contents when available', async () => {
+    const { dir, filePath } = await createTempFile('hello file', 'notes.txt');
+    const attachments: AttachmentRecord[] = [
+      {
+        id: '1',
+        threadId: 't1',
+        messageId: null,
+        filename: 'notes.txt',
+        path: filePath,
+        mimeType: 'text/plain',
+        size: 10,
+        kind: 'file',
+        createdAt: new Date(),
+      },
+    ];
+
+    const content = await buildUserContent('hello', attachments, false, dir);
+    expect(typeof content).toBe('string');
+    expect(content).toContain('Attachment: notes.txt');
+    expect(content).toContain('hello file');
   });
 });

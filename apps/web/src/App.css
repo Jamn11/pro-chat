@@ -5,6 +5,8 @@
   height: 100vh;
   gap: 0;
   overflow: hidden;
+  position: relative;
+  transition: grid-template-columns 0.2s ease;
 }
 
 .app.sidebar-collapsed {
@@ -25,6 +27,24 @@
   transition: width 0.2s ease, padding 0.2s ease, opacity 0.2s ease;
   width: 100%;
   min-width: 0;
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(29, 155, 240, 0.12);
+  border: 2px dashed var(--accent);
+  border-radius: 24px;
+  margin: 16px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  pointer-events: none;
 }
 
 .sidebar.collapsed {
@@ -95,11 +115,15 @@
   gap: 4px;
   cursor: pointer;
   width: 100%;
+  min-width: 0;
 }
 
 .thread-title {
   font-size: 0.9rem;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .thread-cost {
@@ -410,12 +434,36 @@
 }
 
 .composer-toolbar select {
-  padding: 6px 8px;
-  border-radius: 10px;
+  padding: 6px 36px 6px 10px;
+  border-radius: 12px;
   border: 1px solid var(--border);
-  background: var(--panel-muted);
+  background-color: var(--panel-muted);
   color: var(--text);
   height: 32px;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%),
+    linear-gradient(to right, var(--border), var(--border));
+  background-position:
+    calc(100% - 16px) 50%,
+    calc(100% - 11px) 50%,
+    calc(100% - 32px) 50%;
+  background-size: 5px 5px, 5px 5px, 1px 18px;
+  background-repeat: no-repeat;
+}
+
+.composer-toolbar select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.composer-toolbar select option {
+  background: var(--panel);
+  color: var(--text);
 }
 
 .button {

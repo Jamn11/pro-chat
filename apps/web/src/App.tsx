@@ -31,6 +31,12 @@ type ThinkingOption = {
   label: string;
 };
 
+type SlashCommand = {
+  raw: string;
+  command: string;
+  args: string;
+};
+
 const CLAUDE_THINKING_BUDGETS: Record<ThinkingLevel, number> = {
   low: 8192,
   medium: 16384,
@@ -126,25 +132,35 @@ export default function App() {
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isDragActive, setIsDragActive] = useState(false);
   const [streamDuration, setStreamDuration] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const streamTimerRef = useRef<number | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const dragCounterRef = useRef(0);
+  const activeThreadIdRef = useRef<string | null>(null);
+  const skipNextFetchRef = useRef<string | null>(null);
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId) || null;
   const selectedModel = models.find((model) => model.id === selectedModelId) || null;
   const thinkingOptions = useMemo(() => getThinkingOptions(selectedModel), [selectedModel]);
-  const slashQuery = useMemo(() => {
+  const slashCommand = useMemo<SlashCommand | null>(() => {
     const trimmed = composer.trimStart();
     if (!trimmed.startsWith('/')) return null;
     if (composer.includes('\n')) return null;
-    return trimmed.slice(1);
+    const raw = trimmed.slice(1);
+    const [command = '', ...rest] = raw.split(/\s+/);
+    return { raw, command: command.toLowerCase(), args: rest.join(' ') };
   }, [composer]);
+  const isThinkingCommand =
+    slashCommand?.command === 'thinking' || slashCommand?.command === 'think';
+  const modelQuery = slashCommand && !isThinkingCommand ? slashCommand.raw : null;
   const modelSuggestions = useMemo(() => {
-    if (slashQuery === null) return [];
-    const query = normalizeModelText(slashQuery.trim());
+    if (!modelQuery) return [];
+    const query = normalizeModelText(modelQuery.trim());
     const ranked = models
       .map((model) => {
         const labelKey = normalizeModelText(model.label);
@@ -161,8 +177,18 @@ export default function App() {
       .filter((entry) => query === '' || entry.score < 2)
       .sort((a, b) => a.score - b.score || a.model.label.localeCompare(b.model.label));
     return ranked.map((entry) => entry.model).slice(0, 6);
-  }, [models, slashQuery]);
-  const slashCommandActive = slashQuery !== null;
+  }, [models, modelQuery]);
+  const thinkingSuggestions = useMemo(() => {
+    if (!slashCommand || !isThinkingCommand) return [];
+    const query = normalizeModelText(slashCommand.args.trim());
+    return thinkingOptions.filter((option) => {
+      if (!query) return true;
+      const labelKey = normalizeModelText(option.label);
+      const valueKey = normalizeModelText(option.value ?? 'off');
+      return labelKey.includes(query) || valueKey.includes(query);
+    });
+  }, [slashCommand, isThinkingCommand, thinkingOptions]);
+  const slashCommandActive = slashCommand !== null;
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -174,6 +200,10 @@ export default function App() {
       window.localStorage.setItem('pro-chat-theme', theme);
     }
   }, [theme]);
+
+  useEffect(() => {
+    activeThreadIdRef.current = activeThreadId;
+  }, [activeThreadId]);
 
   useEffect(() => {
     async function load() {
@@ -198,9 +228,17 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    setAttachments([]);
     if (!activeThreadId) {
       setMessages([]);
       return;
+    }
+    if (skipNextFetchRef.current && skipNextFetchRef.current === activeThreadId) {
+      skipNextFetchRef.current = null;
+      return;
+    }
+    if (skipNextFetchRef.current && skipNextFetchRef.current !== activeThreadId) {
+      skipNextFetchRef.current = null;
     }
     fetchMessages(activeThreadId)
       .then((data) => setMessages(data))
@@ -231,12 +269,13 @@ export default function App() {
 
   const chatTotalCost = useMemo(() => activeThread?.totalCost ?? 0, [activeThread]);
 
-  const handleNewThread = useCallback(async () => {
-    const thread = await createThread(null);
-    setThreads((prev) => [thread, ...prev]);
-    setActiveThreadId(thread.id);
-    setActiveView('chat');
+  const handleNewThread = useCallback(() => {
+    activeThreadIdRef.current = null;
+    setActiveThreadId(null);
     setMessages([]);
+    setAttachments([]);
+    setComposer('');
+    setActiveView('chat');
   }, []);
 
   useEffect(() => {
@@ -255,6 +294,7 @@ export default function App() {
     setThreads((prev) => prev.filter((thread) => thread.id !== threadId));
     if (activeThreadId === threadId) {
       const nextThread = threads.find((thread) => thread.id !== threadId) || null;
+      activeThreadIdRef.current = nextThread?.id ?? null;
       setActiveThreadId(nextThread?.id ?? null);
       setMessages([]);
     }
@@ -262,16 +302,24 @@ export default function App() {
 
   const handleUpload = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
-    let threadId = activeThreadId;
-    if (!threadId) {
-      const newThread = await createThread(null);
-      setThreads((prev) => [newThread, ...prev]);
-      setActiveThreadId(newThread.id);
-      setActiveView('chat');
-      threadId = newThread.id;
+    setIsUploading(true);
+    try {
+      let threadId = activeThreadIdRef.current;
+      if (!threadId) {
+        const newThread = await createThread(null);
+        setThreads((prev) => [newThread, ...prev]);
+        activeThreadIdRef.current = newThread.id;
+        setActiveThreadId(newThread.id);
+        setActiveView('chat');
+        threadId = newThread.id;
+      }
+      const uploaded = await uploadFiles(threadId, fileList);
+      setAttachments((prev) => [...prev, ...uploaded]);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Upload failed');
+    } finally {
+      setIsUploading(false);
     }
-    const uploaded = await uploadFiles(threadId, fileList);
-    setAttachments((prev) => [...prev, ...uploaded]);
   };
 
   const handleSelectModel = (modelId: string) => {
@@ -283,18 +331,66 @@ export default function App() {
     }
   };
 
+  const handleSelectThinking = (value: ThinkingSelection) => {
+    setThinkingLevel(value);
+    setComposer('');
+    if (composerRef.current) {
+      composerRef.current.focus();
+      composerRef.current.style.height = 'auto';
+    }
+  };
+
+  const handleDragEnter = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    dragCounterRef.current += 1;
+    setIsDragActive(true);
+  }, []);
+
+  const handleDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDragActive(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+  }, []);
+
+  const handleDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      dragCounterRef.current = 0;
+      setIsDragActive(false);
+      if (event.dataTransfer?.files?.length) {
+        void handleUpload(event.dataTransfer.files);
+      }
+    },
+    [handleUpload],
+  );
+
   const handleSend = async () => {
-    if (isStreaming) return;
+    if (isStreaming || isUploading) {
+      if (isUploading) {
+        setErrorMessage('Please wait for file uploads to finish before sending.');
+      }
+      return;
+    }
     let content = composer.trim();
     if (!content && attachments.length > 0) {
       content = 'Please review the attached file(s).';
     }
     if (!content) return;
 
-    let threadId = activeThreadId;
+    let threadId = activeThreadIdRef.current;
     if (!threadId) {
-      const newThread = await createThread(null);
+      const title = content.trim().slice(0, 60) || null;
+      const newThread = await createThread(title);
       setThreads((prev) => [newThread, ...prev]);
+      activeThreadIdRef.current = newThread.id;
+      skipNextFetchRef.current = newThread.id;
       setActiveThreadId(newThread.id);
       setActiveView('chat');
       threadId = newThread.id;
@@ -367,11 +463,17 @@ export default function App() {
               }),
             );
             setThreads((prev) =>
-              prev.map((thread) =>
-                thread.id === threadId
-                  ? { ...thread, totalCost: data.totalCost, updatedAt: new Date().toISOString() }
-                  : thread,
-              ),
+              prev.map((thread) => {
+                if (thread.id !== threadId) return thread;
+                const trimmed = data.userMessage.content?.trim() || '';
+                const nextTitle = thread.title || (trimmed ? trimmed.slice(0, 60) : null);
+                return {
+                  ...thread,
+                  title: nextTitle,
+                  totalCost: data.totalCost,
+                  updatedAt: new Date().toISOString(),
+                };
+              }),
             );
           },
           onError: (message) => {
@@ -399,9 +501,15 @@ export default function App() {
   const handleComposerKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      if (slashCommandActive && modelSuggestions.length > 0) {
-        handleSelectModel(modelSuggestions[0].id);
-        return;
+      if (slashCommandActive) {
+        if (isThinkingCommand && thinkingSuggestions.length > 0) {
+          handleSelectThinking(thinkingSuggestions[0].value ?? null);
+          return;
+        }
+        if (!isThinkingCommand && modelSuggestions.length > 0) {
+          handleSelectModel(modelSuggestions[0].id);
+          return;
+        }
       }
       handleSend();
     }
@@ -413,7 +521,20 @@ export default function App() {
   };
 
   return (
-    <div className={`app ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+    <div
+      className={`app ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${
+        isDragActive ? 'drag-active' : ''
+      }`}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {isDragActive && (
+        <div className="drop-overlay" aria-hidden="true">
+          Drop files to attach
+        </div>
+      )}
       <aside
         className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}
         aria-hidden={sidebarCollapsed}
@@ -442,6 +563,7 @@ export default function App() {
               <button
                 className="thread-button"
                 onClick={() => {
+                  activeThreadIdRef.current = thread.id;
                   setActiveThreadId(thread.id);
                   setActiveView('chat');
                 }}
@@ -576,25 +698,45 @@ export default function App() {
                 placeholder="Type your message..."
                 rows={1}
               />
-              {slashCommandActive && modelSuggestions.length > 0 && (
-                <div className="composer-suggestions">
-                  <div className="composer-suggestion-hint">Select a model</div>
-                  {modelSuggestions.map((model, index) => (
-                    <button
-                      key={model.id}
-                      type="button"
-                      className={`composer-suggestion ${index === 0 ? 'active' : ''}`}
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        handleSelectModel(model.id);
-                      }}
-                    >
-                      <span className="composer-suggestion-label">{model.label}</span>
-                      <span className="composer-suggestion-id">{model.id}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
+              {slashCommandActive &&
+                ((isThinkingCommand && thinkingSuggestions.length > 0) ||
+                  (!isThinkingCommand && modelSuggestions.length > 0)) && (
+                  <div className="composer-suggestions">
+                    <div className="composer-suggestion-hint">
+                      {isThinkingCommand ? 'Set thinking level' : 'Select a model'}
+                    </div>
+                    {isThinkingCommand
+                      ? thinkingSuggestions.map((option, index) => (
+                          <button
+                            key={option.value ?? 'off'}
+                            type="button"
+                            className={`composer-suggestion ${index === 0 ? 'active' : ''}`}
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              handleSelectThinking(option.value ?? null);
+                            }}
+                          >
+                            <span className="composer-suggestion-label">
+                              {option.label.replace('Thinking: ', '')}
+                            </span>
+                          </button>
+                        ))
+                      : modelSuggestions.map((model, index) => (
+                          <button
+                            key={model.id}
+                            type="button"
+                            className={`composer-suggestion ${index === 0 ? 'active' : ''}`}
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              handleSelectModel(model.id);
+                            }}
+                          >
+                            <span className="composer-suggestion-label">{model.label}</span>
+                            <span className="composer-suggestion-id">{model.id}</span>
+                          </button>
+                        ))}
+                  </div>
+                )}
               <div className="composer-toolbar">
                 <label className="icon-button attach-button" aria-label="Attach files">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -639,8 +781,12 @@ export default function App() {
                     </option>
                   ))}
                 </select>
-                <button className="button primary" onClick={handleSend} disabled={isStreaming}>
-                  Send
+                <button
+                  className="button primary"
+                  onClick={handleSend}
+                  disabled={isStreaming || isUploading}
+                >
+                  {isUploading ? 'Uploading…' : 'Send'}
                 </button>
               </div>
             </section>
