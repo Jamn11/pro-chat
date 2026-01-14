@@ -1,0 +1,56 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
+
+:root {
+  color-scheme: light dark;
+  --bg: #f3f4f6;
+  --bg-gradient: radial-gradient(circle at top, #ffffff 0%, #eef1f5 45%, #e3e7ee 100%);
+  --panel: #ffffff;
+  --panel-muted: #f7f7fb;
+  --text: #1a1e24;
+  --muted: #6b7280;
+  --border: #d7dbe2;
+  --accent: #1d9bf0;
+  --accent-soft: rgba(29, 155, 240, 0.15);
+  --danger: #d64545;
+  --shadow: 0 20px 60px rgba(15, 23, 42, 0.12);
+}
+
+[data-theme='dark'] {
+  --bg: #0b0f14;
+  --bg-gradient: radial-gradient(circle at top, #121821 0%, #0b0f14 45%, #06080c 100%);
+  --panel: #141a22;
+  --panel-muted: #1a2230;
+  --text: #e4e7ec;
+  --muted: #8b95a7;
+  --border: #242c3a;
+  --accent: #58c2ff;
+  --accent-soft: rgba(88, 194, 255, 0.18);
+  --danger: #ff7373;
+  --shadow: 0 25px 70px rgba(0, 0, 0, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Space Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+    'Courier New', monospace;
+  background: var(--bg-gradient);
+  color: var(--text);
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+button,
+select,
+textarea,
+input {
+  font-family: inherit;
+}
+
+#root {
+  min-height: 100vh;
+  height: 100vh;
+}

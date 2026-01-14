@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MessageRole {
+  user
+  assistant
+  system
+}
+
+enum AttachmentKind {
+  image
+  file
+}
+
+enum ThinkingLevel {
+  low
+  medium
+  high
+  xhigh
+}
+
+model User {
+  id           String       @id @default(cuid())
+  createdAt    DateTime     @default(now())
+  systemPrompt String?
+  threads      ChatThread[]
+}
+
+model ChatThread {
+  id          String       @id @default(cuid())
+  title       String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  userId      String
+  user        User         @relation(fields: [userId], references: [id])
+  messages    Message[]
+  attachments Attachment[]
+  totalCost   Float        @default(0)
+}
+
+model Model {
+  id                     String   @id
+  label                  String
+  inputCostPerToken      Float
+  outputCostPerToken     Float
+  supportsVision         Boolean  @default(false)
+  supportsThinkingLevels Boolean  @default(false)
+  isActive               Boolean  @default(true)
+  messages               Message[]
+}
+
+model Message {
+  id               String        @id @default(cuid())
+  threadId         String
+  thread           ChatThread    @relation(fields: [threadId], references: [id])
+  role             MessageRole
+  content          String
+  modelId          String?
+  model            Model?        @relation(fields: [modelId], references: [id])
+  thinkingLevel    ThinkingLevel?
+  createdAt        DateTime      @default(now())
+  durationMs       Int?
+  promptTokens     Int?
+  completionTokens Int?
+  cost             Float         @default(0)
+  attachments      Attachment[]
+}
+
+model Attachment {
+  id        String        @id @default(cuid())
+  threadId  String
+  thread    ChatThread    @relation(fields: [threadId], references: [id])
+  messageId String?
+  message   Message?      @relation(fields: [messageId], references: [id])
+  filename  String
+  path      String
+  mimeType  String
+  size      Int
+  kind      AttachmentKind
+  createdAt DateTime      @default(now())
+}
