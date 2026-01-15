@@ -25,6 +25,24 @@ export type AttachmentRecord = {
   createdAt: Date;
 };
 
+export type TraceEvent = {
+  id: string;
+  type: 'reasoning' | 'tool';
+  content: string;
+  createdAt: string;
+};
+
+export type MessageSource = {
+  id: string;
+  kind: 'search' | 'web';
+  title: string;
+  url: string;
+  snippet?: string;
+  status?: number | null;
+  contentType?: string | null;
+  createdAt: string;
+};
+
 export type MessageRecord = {
   id: string;
   threadId: string;
@@ -38,6 +56,8 @@ export type MessageRecord = {
   completionTokens: number | null;
   cost: number;
   attachments?: AttachmentRecord[];
+  trace?: TraceEvent[] | null;
+  sources?: MessageSource[] | null;
 };
 
 export type ThreadSummary = {
@@ -45,6 +65,7 @@ export type ThreadSummary = {
   title: string | null;
   updatedAt: Date;
   totalCost: number;
+  memoryCheckedAt?: Date | null;
 };
 
 export type ThreadRecord = ThreadSummary & {

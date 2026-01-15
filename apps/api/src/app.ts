@@ -7,6 +7,8 @@ import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { ChatService } from './services/chatService';
 import { ChatRepository } from './repositories/types';
+import { MemoryStore } from './services/memoryStore';
+import { MemoryExtractor } from './services/memoryExtractor';
 
 const uploadSchema = z.object({
   threadId: z.string().min(1),
@@ -20,12 +22,24 @@ const settingsSchema = z.object({
   systemPrompt: z.string().optional().nullable(),
 });
 
+const memorySchema = z.object({
+  content: z.string(),
+});
+
 const streamSchema = z.object({
   threadId: z.string().min(1),
   content: z.string().min(1),
   modelId: z.string().min(1),
   thinkingLevel: z.enum(['low', 'medium', 'high', 'xhigh']).optional().nullable(),
   attachmentIds: z.array(z.string()).optional(),
+  clientContext: z
+    .object({
+      iso: z.string().min(1),
+      local: z.string().min(1),
+      timeZone: z.string().optional(),
+      offsetMinutes: z.number().optional(),
+    })
+    .optional(),
 });
 
 const storageFilename = (originalName: string) =>
@@ -35,10 +49,16 @@ export function createApp({
   repo,
   chatService,
   storageRoot,
+  memoryStore,
+  memoryExtractor,
+  traceRetentionDays,
 }: {
   repo: ChatRepository;
   chatService: ChatService;
   storageRoot: string;
+  memoryStore?: MemoryStore;
+  memoryExtractor?: MemoryExtractor;
+  traceRetentionDays?: number;
 }) {
   const app = express();
 
@@ -89,6 +109,47 @@ export function createApp({
     }
   });
 
+  // Memory endpoints
+  app.get('/api/memory', async (_req, res, next) => {
+    try {
+      if (!memoryStore) {
+        res.status(503).json({ error: 'Memory store not configured' });
+        return;
+      }
+      const content = await memoryStore.read();
+      res.json({ content: content ?? '' });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.put('/api/memory', async (req, res, next) => {
+    try {
+      if (!memoryStore) {
+        res.status(503).json({ error: 'Memory store not configured' });
+        return;
+      }
+      const parsed = memorySchema.parse(req.body);
+      await memoryStore.write(parsed.content);
+      res.json({ content: parsed.content });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/memory/extract', async (_req, res, next) => {
+    try {
+      if (!memoryExtractor) {
+        res.status(503).json({ error: 'Memory extractor not configured' });
+        return;
+      }
+      const result = await memoryExtractor.extractFromUncheckedThreads();
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get('/api/threads', async (_req, res, next) => {
     try {
       const threads = await repo.listThreads();
@@ -134,6 +195,10 @@ export function createApp({
   app.get('/api/threads/:id/messages', async (req, res, next) => {
     try {
       const threadId = req.params.id;
+      if (traceRetentionDays && traceRetentionDays > 0) {
+        const cutoff = new Date(Date.now() - traceRetentionDays * 24 * 60 * 60 * 1000);
+        await repo.pruneMessageArtifacts(cutoff);
+      }
       const messages = await repo.getThreadMessages(threadId);
       const payload = messages.map((message) => ({
         ...message,
@@ -229,11 +294,20 @@ export function createApp({
           modelId: parsed.modelId,
           thinkingLevel: parsed.thinkingLevel ?? null,
           attachmentIds: parsed.attachmentIds ?? [],
+          clientContext: parsed.clientContext,
         },
         (chunk) => {
           sendEvent?.('delta', { content: chunk });
         },
         abortController.signal,
+        {
+          onToolStart: (toolName) => {
+            sendEvent?.('tool', { name: toolName });
+          },
+          onReasoning: (delta) => {
+            sendEvent?.('reasoning', { delta });
+          },
+        },
       );
 
       sendEvent('done', {

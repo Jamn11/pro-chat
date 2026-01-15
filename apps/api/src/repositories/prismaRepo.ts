@@ -1,10 +1,12 @@
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import {
   AttachmentRecord,
   MessageRecord,
+  MessageSource,
   ModelInfo,
   ThreadRecord,
   ThreadSummary,
+  TraceEvent,
 } from '../types';
 import {
   ChatRepository,
@@ -105,6 +107,7 @@ export class PrismaChatRepository implements ChatRepository {
       title: thread.title,
       updatedAt: thread.updatedAt,
       totalCost: thread.totalCost,
+      memoryCheckedAt: thread.memoryCheckedAt,
     }));
   }
 
@@ -119,6 +122,7 @@ export class PrismaChatRepository implements ChatRepository {
       createdAt: thread.createdAt,
       updatedAt: thread.updatedAt,
       totalCost: thread.totalCost,
+      memoryCheckedAt: thread.memoryCheckedAt,
     };
   }
 
@@ -155,6 +159,8 @@ export class PrismaChatRepository implements ChatRepository {
       promptTokens: message.promptTokens,
       completionTokens: message.completionTokens,
       cost: message.cost,
+      trace: parseTrace(message.trace),
+      sources: parseSources(message.sources),
       attachments: message.attachments.map((attachment) => ({
         id: attachment.id,
         threadId: attachment.threadId,
@@ -181,6 +187,8 @@ export class PrismaChatRepository implements ChatRepository {
         promptTokens: input.promptTokens ?? null,
         completionTokens: input.completionTokens ?? null,
         cost: input.cost ?? 0,
+        trace: input.trace ?? undefined,
+        sources: input.sources ?? undefined,
       },
     });
     return {
@@ -195,6 +203,8 @@ export class PrismaChatRepository implements ChatRepository {
       promptTokens: message.promptTokens,
       completionTokens: message.completionTokens,
       cost: message.cost,
+      trace: parseTrace(message.trace),
+      sources: parseSources(message.sources),
     };
   }
 
@@ -209,6 +219,8 @@ export class PrismaChatRepository implements ChatRepository {
         promptTokens: data.promptTokens ?? undefined,
         completionTokens: data.completionTokens ?? undefined,
         cost: data.cost ?? undefined,
+        trace: data.trace === undefined ? undefined : data.trace ?? Prisma.DbNull,
+        sources: data.sources === undefined ? undefined : data.sources ?? Prisma.DbNull,
       },
     });
     return {
@@ -223,7 +235,17 @@ export class PrismaChatRepository implements ChatRepository {
       promptTokens: message.promptTokens,
       completionTokens: message.completionTokens,
       cost: message.cost,
+      trace: parseTrace(message.trace),
+      sources: parseSources(message.sources),
     };
+  }
+
+  async pruneMessageArtifacts(before: Date): Promise<number> {
+    const result = await this.prisma.message.updateMany({
+      where: { createdAt: { lt: before } },
+      data: { trace: Prisma.DbNull, sources: Prisma.DbNull },
+    });
+    return result.count;
   }
 
   async incrementThreadCost(threadId: string, delta: number): Promise<number> {
@@ -300,4 +322,51 @@ export class PrismaChatRepository implements ChatRepository {
       createdAt: attachment.createdAt,
     }));
   }
+
+  async getThreadsForMemoryExtraction(): Promise<ThreadSummary[]> {
+    await this.ensureDefaultUser();
+    // Get threads that have messages and either:
+    // - Haven't been memory-checked yet (memoryCheckedAt is null)
+    // - Were updated after the last memory check
+    const threads = await this.prisma.chatThread.findMany({
+      where: {
+        messages: {
+          some: {},
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    // Filter threads that need memory extraction:
+    // Either never checked, or updated after the last check
+    const needsExtraction = threads.filter((thread) => {
+      if (!thread.memoryCheckedAt) return true;
+      return thread.updatedAt > thread.memoryCheckedAt;
+    });
+    return needsExtraction.map((thread) => ({
+      id: thread.id,
+      title: thread.title,
+      updatedAt: thread.updatedAt,
+      totalCost: thread.totalCost,
+      memoryCheckedAt: thread.memoryCheckedAt,
+    }));
+  }
+
+  async markThreadMemoryChecked(threadId: string): Promise<void> {
+    await this.prisma.chatThread.update({
+      where: { id: threadId },
+      data: { memoryCheckedAt: new Date() },
+    });
+  }
 }
+
+const parseTrace = (value: unknown): TraceEvent[] | null => {
+  if (!value) return null;
+  if (Array.isArray(value)) return value as TraceEvent[];
+  return null;
+};
+
+const parseSources = (value: unknown): MessageSource[] | null => {
+  if (!value) return null;
+  if (Array.isArray(value)) return value as MessageSource[];
+  return null;
+};

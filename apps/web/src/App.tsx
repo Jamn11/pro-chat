@@ -4,11 +4,14 @@ import remarkGfm from 'remark-gfm';
 import {
   createThread,
   deleteThread,
+  fetchMemory,
   fetchMessages,
   fetchModels,
   fetchSettings,
   fetchThreads,
   streamChat,
+  triggerMemoryExtraction,
+  updateMemory,
   updateSettings,
   uploadFiles,
 } from './api';
@@ -123,6 +126,8 @@ export default function App() {
   const [composer, setComposer] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [systemPrompt, setSystemPrompt] = useState('');
+  const [memoryContent, setMemoryContent] = useState('');
+  const [isExtractingMemory, setIsExtractingMemory] = useState(false);
   const [activeView, setActiveView] = useState<ViewMode>('chat');
   const [theme, setTheme] = useState<Theme>(() => {
     if (typeof window === 'undefined') return 'dark';
@@ -207,10 +212,11 @@ export default function App() {
 
   useEffect(() => {
     async function load() {
-      const [modelList, threadList, settings] = await Promise.all([
+      const [modelList, threadList, settings, memory] = await Promise.all([
         fetchModels(),
         fetchThreads(),
         fetchSettings(),
+        fetchMemory().catch(() => ({ content: '' })),
       ]);
       setModels(modelList);
       setThreads(threadList);
@@ -218,6 +224,7 @@ export default function App() {
         setSelectedModelId(modelList[0].id);
       }
       setSystemPrompt(settings.systemPrompt ?? '');
+      setMemoryContent(memory.content ?? '');
       if (threadList.length > 0) {
         setActiveThreadId(threadList[0].id);
       }
@@ -432,6 +439,7 @@ export default function App() {
     }, 100);
 
     try {
+      const now = new Date();
       await streamChat(
         {
           threadId,
@@ -439,6 +447,12 @@ export default function App() {
           modelId: selectedModelId,
           thinkingLevel: thinkingLevel ?? null,
           attachmentIds: attachments.map((a) => a.id),
+          clientContext: {
+            iso: now.toISOString(),
+            local: now.toLocaleString(),
+            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            offsetMinutes: now.getTimezoneOffset(),
+          },
         },
         {
           onDelta: (delta) => {
@@ -475,6 +489,10 @@ export default function App() {
                 };
               }),
             );
+            // Refresh memory in case the AI used memory tools
+            fetchMemory()
+              .then((memory) => setMemoryContent(memory.content ?? ''))
+              .catch(() => {});
           },
           onError: (message) => {
             setMessages((prev) =>
@@ -518,6 +536,36 @@ export default function App() {
   const handleSettingsSave = async () => {
     const updated = await updateSettings(systemPrompt);
     setSystemPrompt(updated.systemPrompt ?? '');
+  };
+
+  const handleMemorySave = async () => {
+    try {
+      const updated = await updateMemory(memoryContent);
+      setMemoryContent(updated.content ?? '');
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save memory');
+    }
+  };
+
+  const handleMemoryExtraction = async () => {
+    setIsExtractingMemory(true);
+    try {
+      const result = await triggerMemoryExtraction();
+      // Refresh memory content after extraction
+      const updated = await fetchMemory().catch(() => ({ content: '' }));
+      setMemoryContent(updated.content ?? '');
+      if (result.memoriesAdded > 0) {
+        setErrorMessage(`Added ${result.memoriesAdded} new memories from ${result.processed} chats`);
+      } else if (result.processed === 0) {
+        setErrorMessage('No new chats to analyze for memories');
+      } else {
+        setErrorMessage(`Analyzed ${result.processed} chats, no new memories found`);
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Memory extraction failed');
+    } finally {
+      setIsExtractingMemory(false);
+    }
   };
 
   return (
@@ -831,6 +879,32 @@ export default function App() {
               <div className="settings-actions">
                 <button className="button primary" onClick={handleSettingsSave}>
                   Save Prompt
+                </button>
+              </div>
+            </div>
+            <div className="settings-card">
+              <div className="settings-row">
+                <div>
+                  <h3>Memory</h3>
+                  <p>Facts and preferences about you that the AI remembers across conversations.</p>
+                </div>
+                <button
+                  className="button primary"
+                  onClick={handleMemoryExtraction}
+                  disabled={isExtractingMemory}
+                >
+                  {isExtractingMemory ? 'Extracting...' : 'Update Memory'}
+                </button>
+              </div>
+              <textarea
+                value={memoryContent}
+                onChange={(event) => setMemoryContent(event.target.value)}
+                rows={8}
+                placeholder="Memory is empty. Chat with the AI or click 'Update Memory' to extract memories from your conversations."
+              />
+              <div className="settings-actions">
+                <button className="button primary" onClick={handleMemorySave}>
+                  Save Memory
                 </button>
               </div>
             </div>

@@ -11,10 +11,10 @@ class MockOpenRouterClient extends OpenRouterClient {
 
   async streamChat(
     _input: Parameters<OpenRouterClient['streamChat']>[0],
-    onDelta: (chunk: string) => void,
+    callbacks: Parameters<OpenRouterClient['streamChat']>[1] = {},
   ) {
-    onDelta('Hello');
-    onDelta(' world');
+    callbacks.onDelta?.('Hello');
+    callbacks.onDelta?.(' world');
     return { content: 'Hello world', usage: { prompt_tokens: 10, completion_tokens: 5 } };
   }
 }

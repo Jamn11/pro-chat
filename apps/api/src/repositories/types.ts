@@ -1,10 +1,12 @@
 import {
   AttachmentRecord,
   MessageRecord,
+  MessageSource,
   ModelInfo,
   ThreadRecord,
   ThreadSummary,
   ThinkingLevel,
+  TraceEvent,
 } from '../types';
 
 export type SettingsRecord = {
@@ -25,6 +27,8 @@ export type CreateMessageInput = {
   promptTokens?: number | null;
   completionTokens?: number | null;
   cost?: number | null;
+  trace?: TraceEvent[] | null;
+  sources?: MessageSource[] | null;
 };
 
 export type CreateAttachmentInput = {
@@ -49,9 +53,13 @@ export interface ChatRepository {
   getThreadMessages(threadId: string): Promise<MessageRecord[]>;
   createMessage(input: CreateMessageInput): Promise<MessageRecord>;
   updateMessage(id: string, data: Partial<CreateMessageInput>): Promise<MessageRecord>;
+  pruneMessageArtifacts(before: Date): Promise<number>;
   incrementThreadCost(threadId: string, delta: number): Promise<number>;
   createAttachment(input: CreateAttachmentInput): Promise<AttachmentRecord>;
   attachAttachmentsToMessage(messageId: string, attachmentIds: string[]): Promise<void>;
   getAttachmentsByIds(ids: string[]): Promise<AttachmentRecord[]>;
   listAttachmentsForThread(threadId: string): Promise<AttachmentRecord[]>;
+  // Memory tracking methods
+  getThreadsForMemoryExtraction(): Promise<ThreadSummary[]>;
+  markThreadMemoryChecked(threadId: string): Promise<void>;
 }

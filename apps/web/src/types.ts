@@ -40,6 +40,17 @@ export type Settings = {
   systemPrompt: string | null;
 };
 
+export type Memory = {
+  content: string;
+};
+
+export type MemoryExtractionResult = {
+  processed: number;
+  memoriesAdded: number;
+  skipped: number;
+  errors: number;
+};
+
 export type UploadAttachment = Attachment;
 
 export type UIMessage = Message & {

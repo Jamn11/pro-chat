@@ -14,11 +14,13 @@ import {
   SettingsRecord,
 } from './types';
 
+type InternalThread = ThreadRecord & { memoryCheckedAt: Date | null };
+
 export class InMemoryChatRepository implements ChatRepository {
   private userId = randomUUID();
   private systemPrompt: string | null = null;
   private models = new Map<string, ModelInfo>();
-  private threads = new Map<string, ThreadRecord>();
+  private threads = new Map<string, InternalThread>();
   private messages = new Map<string, MessageRecord>();
   private attachments = new Map<string, AttachmentRecord>();
 
@@ -51,16 +53,18 @@ export class InMemoryChatRepository implements ChatRepository {
       title: thread.title,
       updatedAt: thread.updatedAt,
       totalCost: thread.totalCost,
+      memoryCheckedAt: thread.memoryCheckedAt,
     }));
   }
 
   async createThread(input: CreateThreadInput): Promise<ThreadRecord> {
-    const thread: ThreadRecord = {
+    const thread: InternalThread = {
       id: randomUUID(),
       title: input.title ?? null,
       createdAt: new Date(),
       updatedAt: new Date(),
       totalCost: 0,
+      memoryCheckedAt: null,
     };
     this.threads.set(thread.id, thread);
     return thread;
@@ -108,8 +112,16 @@ export class InMemoryChatRepository implements ChatRepository {
       promptTokens: input.promptTokens ?? null,
       completionTokens: input.completionTokens ?? null,
       cost: input.cost ?? 0,
+      trace: input.trace ?? null,
+      sources: input.sources ?? null,
     };
     this.messages.set(message.id, message);
+    // Update thread updatedAt
+    const thread = this.threads.get(input.threadId);
+    if (thread) {
+      thread.updatedAt = new Date();
+      this.threads.set(input.threadId, thread);
+    }
     return message;
   }
 
@@ -125,9 +137,24 @@ export class InMemoryChatRepository implements ChatRepository {
       promptTokens: data.promptTokens ?? message.promptTokens,
       completionTokens: data.completionTokens ?? message.completionTokens,
       cost: data.cost ?? message.cost,
+      trace: data.trace === undefined ? message.trace : data.trace,
+      sources: data.sources === undefined ? message.sources : data.sources,
     };
     this.messages.set(id, updated);
     return updated;
+  }
+
+  async pruneMessageArtifacts(before: Date): Promise<number> {
+    let count = 0;
+    for (const [id, message] of this.messages) {
+      if (message.createdAt < before) {
+        message.trace = null;
+        message.sources = null;
+        this.messages.set(id, message);
+        count++;
+      }
+    }
+    return count;
   }
 
   async incrementThreadCost(threadId: string, delta: number): Promise<number> {
@@ -171,5 +198,33 @@ export class InMemoryChatRepository implements ChatRepository {
 
   async listAttachmentsForThread(threadId: string): Promise<AttachmentRecord[]> {
     return [...this.attachments.values()].filter((a) => a.threadId === threadId);
+  }
+
+  async getThreadsForMemoryExtraction(): Promise<ThreadSummary[]> {
+    const allThreads = [...this.threads.values()];
+    // Filter threads that need memory extraction:
+    // - Have at least one message
+    // - Either never checked, or updated after the last check
+    const threadsWithMessages = allThreads.filter((thread) => {
+      const hasMessages = [...this.messages.values()].some((m) => m.threadId === thread.id);
+      if (!hasMessages) return false;
+      if (!thread.memoryCheckedAt) return true;
+      return thread.updatedAt > thread.memoryCheckedAt;
+    });
+    return threadsWithMessages.map((thread) => ({
+      id: thread.id,
+      title: thread.title,
+      updatedAt: thread.updatedAt,
+      totalCost: thread.totalCost,
+      memoryCheckedAt: thread.memoryCheckedAt,
+    }));
+  }
+
+  async markThreadMemoryChecked(threadId: string): Promise<void> {
+    const thread = this.threads.get(threadId);
+    if (thread) {
+      thread.memoryCheckedAt = new Date();
+      this.threads.set(threadId, thread);
+    }
   }
 }

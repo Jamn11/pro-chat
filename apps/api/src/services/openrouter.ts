@@ -1,9 +1,50 @@
 import { createParser, ParsedEvent, ReconnectInterval } from 'eventsource-parser';
 
-export type OpenRouterMessage = {
-  role: 'system' | 'user' | 'assistant';
-  content: string | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }>;
+export type OpenRouterToolCall = {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
 };
+
+export type OpenRouterToolDefinition = {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters: Record<string, unknown>;
+  };
+};
+
+export type OpenRouterToolChoice =
+  | 'auto'
+  | 'none'
+  | {
+      type: 'function';
+      function: { name: string };
+    };
+
+type OpenRouterContent =
+  | string
+  | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }>;
+
+export type OpenRouterMessage =
+  | {
+      role: 'system' | 'user';
+      content: OpenRouterContent;
+    }
+  | {
+      role: 'assistant';
+      content: OpenRouterContent | null;
+      tool_calls?: OpenRouterToolCall[];
+    }
+  | {
+      role: 'tool';
+      content: string;
+      tool_call_id: string;
+    };
 
 export type OpenRouterUsage = {
   prompt_tokens?: number;
@@ -14,6 +55,7 @@ export type OpenRouterUsage = {
 export type OpenRouterStreamResult = {
   content: string;
   usage?: OpenRouterUsage;
+  toolCalls?: OpenRouterToolCall[];
 };
 
 export type OpenRouterReasoning = {
@@ -34,6 +76,8 @@ export type StreamChatInput = {
   messages: OpenRouterMessage[];
   reasoning?: OpenRouterReasoning | null;
   maxTokens?: number;
+  tools?: OpenRouterToolDefinition[];
+  toolChoice?: OpenRouterToolChoice;
   signal?: AbortSignal;
 };
 
@@ -48,7 +92,13 @@ export class OpenRouterClient {
     this.appName = options.appName;
   }
 
-  async streamChat(input: StreamChatInput, onDelta: (chunk: string) => void): Promise<OpenRouterStreamResult> {
+  async streamChat(
+    input: StreamChatInput,
+    callbacks: {
+      onDelta?: (chunk: string) => void;
+      onReasoning?: (delta: string) => void;
+    } = {},
+  ): Promise<OpenRouterStreamResult> {
     const body: Record<string, unknown> = {
       model: input.model,
       messages: input.messages,
@@ -61,6 +111,12 @@ export class OpenRouterClient {
     }
     if (input.maxTokens) {
       body.max_tokens = input.maxTokens;
+    }
+    if (input.tools && input.tools.length > 0) {
+      body.tools = input.tools;
+    }
+    if (input.toolChoice) {
+      body.tool_choice = input.toolChoice;
     }
 
     const headers: Record<string, string> = {
@@ -87,6 +143,7 @@ export class OpenRouterClient {
     let usage: OpenRouterUsage | undefined;
 
     let streamError: Error | null = null;
+    const toolCalls: OpenRouterToolCall[] = [];
     const parser = createParser((event: ParsedEvent | ReconnectInterval) => {
       if (event.type !== 'event') return;
       const data = event.data;
@@ -98,10 +155,48 @@ export class OpenRouterClient {
         if (parsed.error) {
           throw new Error(parsed.error.message || 'OpenRouter error');
         }
-        const delta = parsed.choices?.[0]?.delta?.content;
+        const choice = parsed.choices?.[0];
+        const delta = choice?.delta?.content;
         if (typeof delta === 'string' && delta.length > 0) {
           content += delta;
-          onDelta(delta);
+          callbacks.onDelta?.(delta);
+        }
+        const reasoningDelta = choice?.delta?.reasoning;
+        if (typeof reasoningDelta === 'string' && reasoningDelta.length > 0) {
+          callbacks.onReasoning?.(reasoningDelta);
+        }
+        const reasoningDetails = choice?.delta?.reasoning_details;
+        if (Array.isArray(reasoningDetails)) {
+          for (const detail of reasoningDetails) {
+            const text = extractReasoningText(detail);
+            if (text) {
+              callbacks.onReasoning?.(text);
+            }
+          }
+        }
+        const toolDeltas = choice?.delta?.tool_calls;
+        if (Array.isArray(toolDeltas)) {
+          for (const toolDelta of toolDeltas) {
+            const index =
+              typeof toolDelta.index === 'number' ? toolDelta.index : toolCalls.length;
+            if (!toolCalls[index]) {
+              toolCalls[index] = {
+                id: toolDelta.id ?? `tool_${index}`,
+                type: toolDelta.type ?? 'function',
+                function: {
+                  name: toolDelta.function?.name ?? '',
+                  arguments: toolDelta.function?.arguments ?? '',
+                },
+              };
+            } else {
+              if (toolDelta.id) toolCalls[index].id = toolDelta.id;
+              if (toolDelta.type) toolCalls[index].type = toolDelta.type;
+              if (toolDelta.function?.name) toolCalls[index].function.name = toolDelta.function.name;
+              if (toolDelta.function?.arguments) {
+                toolCalls[index].function.arguments += toolDelta.function.arguments;
+              }
+            }
+          }
         }
         if (parsed.usage) {
           usage = parsed.usage;
@@ -124,6 +219,24 @@ export class OpenRouterClient {
       }
     }
 
-    return { content, usage };
+    const finalizedToolCalls = toolCalls.filter((call) => call.function.name);
+
+    return { content, usage, toolCalls: finalizedToolCalls.length > 0 ? finalizedToolCalls : undefined };
   }
 }
+
+const extractReasoningText = (detail: unknown): string | null => {
+  if (!detail) return null;
+  if (typeof detail === 'string') return detail;
+  if (typeof detail === 'object') {
+    const record = detail as Record<string, unknown>;
+    if (typeof record.text === 'string') return record.text;
+    if (typeof record.reasoning === 'string') return record.reasoning;
+    if (typeof record.summary === 'string') return record.summary;
+    if (Array.isArray(record.summary)) {
+      return record.summary.filter((item) => typeof item === 'string').join('\n');
+    }
+    if (typeof record.content === 'string') return record.content;
+  }
+  return null;
+};

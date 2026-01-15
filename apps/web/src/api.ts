@@ -1,4 +1,4 @@
-import type { Message, ModelInfo, Settings, ThreadSummary, UploadAttachment } from './types';
+import type { Memory, MemoryExtractionResult, Message, ModelInfo, Settings, ThreadSummary, UploadAttachment } from './types';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
@@ -59,6 +59,28 @@ export async function updateSettings(systemPrompt: string | null): Promise<Setti
   return handleJson<Settings>(res);
 }
 
+export async function fetchMemory(): Promise<Memory> {
+  const res = await fetch('/api/memory');
+  return handleJson<Memory>(res);
+}
+
+export async function updateMemory(content: string): Promise<Memory> {
+  const res = await fetch('/api/memory', {
+    method: 'PUT',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ content }),
+  });
+  return handleJson<Memory>(res);
+}
+
+export async function triggerMemoryExtraction(): Promise<MemoryExtractionResult> {
+  const res = await fetch('/api/memory/extract', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+  });
+  return handleJson<MemoryExtractionResult>(res);
+}
+
 export async function uploadFiles(threadId: string, files: FileList): Promise<UploadAttachment[]> {
   const formData = new FormData();
   formData.append('threadId', threadId);
@@ -78,6 +100,8 @@ export async function uploadFiles(threadId: string, files: FileList): Promise<Up
 export type StreamCallbacks = {
   onMeta?: (data: { threadId: string; modelId: string }) => void;
   onDelta?: (delta: string) => void;
+  onTool?: (data: { name: string }) => void;
+  onReasoning?: (data: { delta: string }) => void;
   onDone?: (data: {
     userMessage: Message;
     assistantMessage: Message;
@@ -96,6 +120,12 @@ export async function streamChat(
     modelId: string;
     thinkingLevel?: string | null;
     attachmentIds?: string[];
+    clientContext?: {
+      iso: string;
+      local: string;
+      timeZone?: string;
+      offsetMinutes?: number;
+    };
   },
   callbacks: StreamCallbacks,
 ) {
@@ -139,6 +169,8 @@ export async function streamChat(
         const parsed = JSON.parse(data);
         if (event === 'meta') callbacks.onMeta?.(parsed);
         if (event === 'delta') callbacks.onDelta?.(parsed.content);
+        if (event === 'tool') callbacks.onTool?.(parsed);
+        if (event === 'reasoning') callbacks.onReasoning?.(parsed);
         if (event === 'done') callbacks.onDone?.(parsed);
         if (event === 'error') callbacks.onError?.(parsed.message);
       }

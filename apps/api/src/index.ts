@@ -6,6 +6,7 @@ import { OpenRouterClient } from './services/openrouter';
 import { ChatService } from './services/chatService';
 import { MODEL_SEED } from './modelSeed';
 import { MemoryStore } from './services/memoryStore';
+import { MemoryExtractor } from './services/memoryExtractor';
 import { PythonTool } from './services/pythonTool';
 import { BraveSearchProvider } from './services/braveSearchProvider';
 import { SearchTool } from './services/searchTool';
@@ -34,7 +35,29 @@ const pythonTool = new PythonTool();
 const searchTool = env.BRAVE_SEARCH_API_KEY
   ? new SearchTool(new BraveSearchProvider({ apiKey: env.BRAVE_SEARCH_API_KEY }))
   : undefined;
-const webFetchTool = new WebFetchTool();
+
+const parseDomainList = (value?: string): string[] | undefined => {
+  if (!value) return undefined;
+  const domains = value
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  return domains.length > 0 ? domains : undefined;
+};
+
+const webFetchTool = new WebFetchTool({
+  allowedDomains: parseDomainList(env.WEB_FETCH_ALLOW_DOMAINS),
+  blockedDomains: parseDomainList(env.WEB_FETCH_DENY_DOMAINS),
+  maxRedirects: env.WEB_FETCH_MAX_REDIRECTS,
+  render: env.WEB_FETCH_RENDER_URL
+    ? {
+        mode: env.WEB_FETCH_RENDER_MODE ?? 'auto',
+        url: env.WEB_FETCH_RENDER_URL,
+        header: env.WEB_FETCH_RENDER_HEADER,
+        token: env.WEB_FETCH_RENDER_TOKEN,
+      }
+    : undefined,
+});
 
 const chatService = new ChatService(repository, openRouter, storageRoot, {
   memoryStore,
@@ -42,9 +65,26 @@ const chatService = new ChatService(repository, openRouter, storageRoot, {
   searchTool,
   webFetchTool,
   maxToolIterations: 30,
+  tracePolicy: {
+    maxEvents: env.TRACE_MAX_EVENTS,
+    maxChars: env.TRACE_MAX_CHARS,
+    maxSources: env.TRACE_MAX_SOURCES,
+    maxSourceChars: env.TRACE_MAX_SOURCE_CHARS,
+    maxSourceSnippetChars: env.TRACE_MAX_SOURCE_SNIPPET_CHARS,
+    retentionDays: env.TRACE_RETENTION_DAYS,
+  },
 });
 
-const app = createApp({ repo: repository, chatService, storageRoot });
+const memoryExtractor = new MemoryExtractor(repository, memoryStore, openRouter);
+
+const app = createApp({
+  repo: repository,
+  chatService,
+  storageRoot,
+  memoryStore,
+  memoryExtractor,
+  traceRetentionDays: env.TRACE_RETENTION_DAYS,
+});
 
 async function bootstrap() {
   await repository.ensureDefaultUser();

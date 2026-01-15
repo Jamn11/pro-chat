@@ -12,7 +12,7 @@ const createThread = vi.hoisted(
       totalCost: 0,
     })),
 );
-const streamChat = vi.hoisted(() => vi.fn(async () => {}));
+const streamChat = vi.hoisted(() => vi.fn(async (_payload: unknown, _callbacks?: unknown) => {}));
 
 vi.mock('./api', () => ({
   fetchModels: vi.fn(async () => [
@@ -44,10 +44,13 @@ vi.mock('./api', () => ({
     },
   ]),
   fetchSettings: vi.fn(async () => ({ systemPrompt: '' })),
+  fetchMemory: vi.fn(async () => ({ content: '' })),
   fetchMessages: vi.fn(async () => []),
   createThread,
   deleteThread: vi.fn(async () => {}),
   updateSettings: vi.fn(async () => ({ systemPrompt: '' })),
+  updateMemory: vi.fn(async () => ({ content: '' })),
+  triggerMemoryExtraction: vi.fn(async () => ({ processed: 0, memoriesAdded: 0, skipped: 0, errors: 0 })),
   uploadFiles: vi.fn(async () => []),
   streamChat,
 }));
@@ -117,7 +120,6 @@ describe('App', () => {
   });
 
   it('creates a new chat with cmd+shift+o', async () => {
-    const user = userEvent.setup();
     createThread.mockClear();
     render(<App />);
 
@@ -132,7 +134,8 @@ describe('App', () => {
 
   it('keeps messages visible after starting a new chat and sending', async () => {
     const user = userEvent.setup();
-    streamChat.mockImplementationOnce(async (_payload, callbacks) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    streamChat.mockImplementationOnce(async (_payload: unknown, callbacks: any) => {
       callbacks?.onDone?.({
         userMessage: {
           id: 'user-1',
