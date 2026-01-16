@@ -34,10 +34,30 @@ export type Message = {
   promptTokens?: number | null;
   completionTokens?: number | null;
   attachments?: Attachment[];
+  trace?: TraceEvent[] | null;
+  sources?: MessageSource[] | null;
 };
 
 export type Settings = {
   systemPrompt: string | null;
+};
+
+export type TraceEvent = {
+  id: string;
+  type: 'reasoning' | 'tool';
+  content: string;
+  createdAt: string;
+};
+
+export type MessageSource = {
+  id: string;
+  kind: 'search' | 'web';
+  title: string;
+  url: string;
+  snippet?: string;
+  status?: number | null;
+  contentType?: string | null;
+  createdAt: string;
 };
 
 export type Memory = {

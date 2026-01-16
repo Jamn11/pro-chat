@@ -126,13 +126,16 @@ export async function streamChat(
       timeZone?: string;
       offsetMinutes?: number;
     };
+    signal?: AbortSignal;
   },
   callbacks: StreamCallbacks,
 ) {
+  const { signal, ...body } = payload;
   const response = await fetch('/api/chat/stream', {
     method: 'POST',
     headers: JSON_HEADERS,
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
+    signal,
   });
 
   if (!response.ok || !response.body) {

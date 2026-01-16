@@ -22,7 +22,7 @@ export const MODEL_SEED: ModelInfo[] = [
     label: 'Claude Opus 4.5',
     inputCostPerToken: 0.000005,
     outputCostPerToken: 0.000025,
-    supportsVision: false,
+    supportsVision: true,
     supportsThinkingLevels: true,
   },
   {
@@ -30,7 +30,7 @@ export const MODEL_SEED: ModelInfo[] = [
     label: 'Claude Sonnet 4.5',
     inputCostPerToken: 0.000003,
     outputCostPerToken: 0.000015,
-    supportsVision: false,
+    supportsVision: true,
     supportsThinkingLevels: true,
   },
   {
@@ -38,7 +38,7 @@ export const MODEL_SEED: ModelInfo[] = [
     label: 'Grok 4.1 Fast',
     inputCostPerToken: 0.0000002,
     outputCostPerToken: 0.0000005,
-    supportsVision: false,
+    supportsVision: true,
     supportsThinkingLevels: true,
   },
 ];

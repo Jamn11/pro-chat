@@ -3,10 +3,11 @@ import type { OpenRouterReasoning } from '../services/openrouter';
 
 type ThinkingMode = 'none' | 'toggle' | 'effort' | 'budget';
 
-const CLAUDE_THINKING_BUDGETS: Record<'low' | 'medium' | 'high', number> = {
+const CLAUDE_THINKING_BUDGETS: Record<'low' | 'medium' | 'high' | 'xhigh', number> = {
   low: 8192,
   medium: 16384,
   high: 32768,
+  xhigh: 65536,
 };
 
 const MODEL_THINKING_MODES: Record<string, ThinkingMode> = {
@@ -17,9 +18,8 @@ const MODEL_THINKING_MODES: Record<string, ThinkingMode> = {
   'google/gemini-3-pro-preview': 'none',
 };
 
-const normalizeLevel = (level: ThinkingLevel | null | undefined): 'low' | 'medium' | 'high' | null => {
+const normalizeLevel = (level: ThinkingLevel | null | undefined): ThinkingLevel | null => {
   if (!level) return null;
-  if (level === 'xhigh') return 'high';
   return level;
 };
 

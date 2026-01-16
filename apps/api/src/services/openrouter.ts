@@ -161,16 +161,20 @@ export class OpenRouterClient {
           content += delta;
           callbacks.onDelta?.(delta);
         }
+        // Check reasoning field first (primary), then reasoning_details as fallback
+        // Don't use both to avoid duplication
         const reasoningDelta = choice?.delta?.reasoning;
         if (typeof reasoningDelta === 'string' && reasoningDelta.length > 0) {
           callbacks.onReasoning?.(reasoningDelta);
-        }
-        const reasoningDetails = choice?.delta?.reasoning_details;
-        if (Array.isArray(reasoningDetails)) {
-          for (const detail of reasoningDetails) {
-            const text = extractReasoningText(detail);
-            if (text) {
-              callbacks.onReasoning?.(text);
+        } else {
+          // Only check reasoning_details if reasoning was not present
+          const reasoningDetails = choice?.delta?.reasoning_details;
+          if (Array.isArray(reasoningDetails)) {
+            for (const detail of reasoningDetails) {
+              const text = extractReasoningText(detail);
+              if (text) {
+                callbacks.onReasoning?.(text);
+              }
             }
           }
         }

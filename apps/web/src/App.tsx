@@ -20,7 +20,7 @@ import './App.css';
 
 type Theme = 'light' | 'dark';
 type ViewMode = 'chat' | 'settings';
-type ThinkingLevel = 'low' | 'medium' | 'high';
+type ThinkingLevel = 'low' | 'medium' | 'high' | 'xhigh';
 type ThinkingSelection = ThinkingLevel | null;
 
 type ThinkingProfile =
@@ -44,6 +44,7 @@ const CLAUDE_THINKING_BUDGETS: Record<ThinkingLevel, number> = {
   low: 8192,
   medium: 16384,
   high: 32768,
+  xhigh: 65536,
 };
 
 const MODEL_THINKING_PROFILES: Record<string, ThinkingProfile> = {
@@ -87,6 +88,10 @@ const getThinkingOptions = (model: ModelInfo | null): ThinkingOption[] => {
         value: 'high',
         label: `Thinking: High (${formatBudgetLabel(CLAUDE_THINKING_BUDGETS.high)})`,
       },
+      {
+        value: 'xhigh',
+        label: `Thinking: Extra High (${formatBudgetLabel(CLAUDE_THINKING_BUDGETS.xhigh)})`,
+      },
     ];
   }
   return [
@@ -94,6 +99,7 @@ const getThinkingOptions = (model: ModelInfo | null): ThinkingOption[] => {
     { value: 'low', label: 'Thinking: Low' },
     { value: 'medium', label: 'Thinking: Medium' },
     { value: 'high', label: 'Thinking: High' },
+    { value: 'xhigh', label: 'Thinking: Extra High' },
   ];
 };
 
@@ -115,6 +121,33 @@ const formatDuration = (ms?: number | null) => {
   const seconds = ms / 1000;
   return `${seconds.toFixed(2)}s`;
 };
+
+type PreBlockProps = {
+  children?: React.ReactNode;
+  node?: unknown;
+};
+
+function PreBlock({ children, ...props }: PreBlockProps) {
+  const [copied, setCopied] = useState(false);
+  const preRef = useRef<HTMLPreElement>(null);
+
+  const handleCopy = async () => {
+    // Extract text content from the pre element
+    const text = preRef.current?.textContent?.replace(/\n$/, '') || '';
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="code-block-wrapper">
+      <button className="code-copy-button" onClick={handleCopy} aria-label="Copy code">
+        {copied ? '✓' : '⧉'}
+      </button>
+      <pre ref={preRef} {...props}>{children}</pre>
+    </div>
+  );
+}
 
 export default function App() {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
@@ -141,6 +174,9 @@ export default function App() {
   const [isDragActive, setIsDragActive] = useState(false);
   const [streamDuration, setStreamDuration] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [openTraceMessageId, setOpenTraceMessageId] = useState<string | null>(null);
+  const [openSourcesMessageId, setOpenSourcesMessageId] = useState<string | null>(null);
+  const [streamingTraceMessageId, setStreamingTraceMessageId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const streamTimerRef = useRef<number | null>(null);
@@ -148,6 +184,9 @@ export default function App() {
   const dragCounterRef = useRef(0);
   const activeThreadIdRef = useRef<string | null>(null);
   const skipNextFetchRef = useRef<string | null>(null);
+  const streamingTraceRef = useRef<string>('');
+  const lastReasoningLengthRef = useRef<number>(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId) || null;
   const selectedModel = models.find((model) => model.id === selectedModelId) || null;
@@ -429,6 +468,9 @@ export default function App() {
     setAttachments([]);
     setIsStreaming(true);
     setStreamDuration(0);
+    // Reset streaming trace refs for new stream
+    streamingTraceRef.current = '';
+    lastReasoningLengthRef.current = 0;
     if (composerRef.current) {
       composerRef.current.style.height = 'auto';
     }
@@ -438,6 +480,10 @@ export default function App() {
       setStreamDuration(Date.now() - start);
     }, 100);
 
+    // Create abort controller for this request
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
     try {
       const now = new Date();
       await streamChat(
@@ -446,6 +492,7 @@ export default function App() {
           content,
           modelId: selectedModelId,
           thinkingLevel: thinkingLevel ?? null,
+          signal: abortController.signal,
           attachmentIds: attachments.map((a) => a.id),
           clientContext: {
             iso: now.toISOString(),
@@ -462,6 +509,68 @@ export default function App() {
                   ? { ...msg, content: `${msg.content}${delta}`, status: 'streaming' }
                   : msg,
               ),
+            );
+          },
+          onReasoning: (data) => {
+            // Use ref to accumulate reasoning and dedupe against React double-invocation
+            const newLength = streamingTraceRef.current.length + data.delta.length;
+            // Only append if this is actually new content (dedupe)
+            if (newLength > lastReasoningLengthRef.current) {
+              streamingTraceRef.current += data.delta;
+              lastReasoningLengthRef.current = newLength;
+
+              // Sync ref content to state
+              const content = streamingTraceRef.current;
+              setMessages((prev) =>
+                prev.map((msg) => {
+                  if (msg.id !== tempAssistantId) return msg;
+                  const trace = msg.trace ?? [];
+                  // Update existing reasoning event or create new one
+                  if (trace.length > 0 && trace[trace.length - 1].type === 'reasoning') {
+                    const last = trace[trace.length - 1];
+                    return {
+                      ...msg,
+                      trace: [
+                        ...trace.slice(0, -1),
+                        { ...last, content },
+                      ],
+                    };
+                  }
+                  return {
+                    ...msg,
+                    trace: [
+                      ...trace,
+                      {
+                        id: `trace-reasoning-${tempAssistantId}`,
+                        type: 'reasoning' as const,
+                        content,
+                        createdAt: new Date().toISOString(),
+                      },
+                    ],
+                  };
+                }),
+              );
+            }
+          },
+          onTool: (data) => {
+            // Add tool event to trace
+            setMessages((prev) =>
+              prev.map((msg) => {
+                if (msg.id !== tempAssistantId) return msg;
+                const trace = msg.trace ?? [];
+                return {
+                  ...msg,
+                  trace: [
+                    ...trace,
+                    {
+                      id: `trace-tool-${Date.now()}`,
+                      type: 'tool' as const,
+                      content: `Tool: ${data.name}`,
+                      createdAt: new Date().toISOString(),
+                    },
+                  ],
+                };
+              }),
             );
           },
           onDone: (data) => {
@@ -489,6 +598,8 @@ export default function App() {
                 };
               }),
             );
+            // Clear streaming trace state
+            setStreamingTraceMessageId(null);
             // Refresh memory in case the AI used memory tools
             fetchMemory()
               .then((memory) => setMemoryContent(memory.content ?? ''))
@@ -502,17 +613,52 @@ export default function App() {
                   : msg,
               ),
             );
+            setStreamingTraceMessageId(null);
           },
         },
       );
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Streaming failed');
+      // Don't show error if user aborted the request
+      if (error instanceof Error && error.name === 'AbortError') {
+        // Silently handle abort - user clicked Stop
+      } else {
+        setErrorMessage(error instanceof Error ? error.message : 'Streaming failed');
+      }
     } finally {
       if (streamTimerRef.current) {
         window.clearInterval(streamTimerRef.current);
         streamTimerRef.current = null;
       }
+      abortControllerRef.current = null;
       setIsStreaming(false);
+    }
+  };
+
+  const handleStop = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+  };
+
+  const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = event.clipboardData?.items;
+    if (!items) return;
+
+    const imageFiles: File[] = [];
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          imageFiles.push(file);
+        }
+      }
+    }
+
+    if (imageFiles.length > 0) {
+      event.preventDefault();
+      const dataTransfer = new DataTransfer();
+      imageFiles.forEach((file) => dataTransfer.items.add(file));
+      void handleUpload(dataTransfer.files);
     }
   };
 
@@ -660,7 +806,7 @@ export default function App() {
               <div className="chat-meta">
                 <span className="cost-chip">Chat total {formatCost(chatTotalCost)}</span>
                 {isStreaming && (
-                  <span className="timer-chip">⏱ {(streamDuration / 1000).toFixed(2)}s</span>
+                  <span className="timer-chip">⏱ {(streamDuration / 1000).toFixed(1)}s</span>
                 )}
               </div>
             </header>
@@ -681,7 +827,10 @@ export default function App() {
                   </div>
                   <div className="message-content">
                     {message.role === 'assistant' ? (
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{ pre: PreBlock }}
+                      >
                         {message.content || (message.status === 'streaming' ? 'Thinking…' : '')}
                       </ReactMarkdown>
                     ) : (
@@ -722,6 +871,41 @@ export default function App() {
                       <span>⏱ {formatDuration(message.durationMs)}</span>
                     )}
                     {message.modelId && <span>{message.modelId}</span>}
+                    {message.role === 'assistant' &&
+                      (message.trace && message.trace.length > 0 || message.status === 'streaming') && (
+                      <button
+                        className={`trace-toggle ${message.status === 'streaming' && message.trace?.length ? 'streaming' : ''}`}
+                        onClick={() => {
+                          if (message.status === 'streaming') {
+                            setStreamingTraceMessageId(
+                              streamingTraceMessageId === message.id ? null : message.id,
+                            );
+                          } else {
+                            setOpenTraceMessageId(
+                              openTraceMessageId === message.id ? null : message.id,
+                            );
+                          }
+                        }}
+                      >
+                        {message.status === 'streaming' && message.trace?.length
+                          ? `Thinking… (${message.trace.length})`
+                          : message.trace?.length
+                            ? `Trace (${message.trace.length})`
+                            : 'Thinking…'}
+                      </button>
+                    )}
+                    {message.role === 'assistant' && message.sources && message.sources.length > 0 && (
+                      <button
+                        className="trace-toggle"
+                        onClick={() =>
+                          setOpenSourcesMessageId(
+                            openSourcesMessageId === message.id ? null : message.id,
+                          )
+                        }
+                      >
+                        Sources ({message.sources.length})
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -743,6 +927,7 @@ export default function App() {
                 value={composer}
                 onChange={(event) => setComposer(event.target.value)}
                 onKeyDown={handleComposerKeyDown}
+                onPaste={handlePaste}
                 placeholder="Type your message..."
                 rows={1}
               />
@@ -819,7 +1004,7 @@ export default function App() {
                   value={thinkingLevel ?? ''}
                   onChange={(event) =>
                     setThinkingLevel(
-                      (event.target.value || null) as 'low' | 'medium' | 'high' | null,
+                      (event.target.value || null) as 'low' | 'medium' | 'high' | 'xhigh' | null,
                     )
                   }
                 >
@@ -829,13 +1014,19 @@ export default function App() {
                     </option>
                   ))}
                 </select>
-                <button
-                  className="button primary"
-                  onClick={handleSend}
-                  disabled={isStreaming || isUploading}
-                >
-                  {isUploading ? 'Uploading…' : 'Send'}
-                </button>
+                {isStreaming ? (
+                  <button className="button stop" onClick={handleStop}>
+                    Stop
+                  </button>
+                ) : (
+                  <button
+                    className="button primary"
+                    onClick={handleSend}
+                    disabled={isUploading}
+                  >
+                    {isUploading ? 'Uploading…' : 'Send'}
+                  </button>
+                )}
               </div>
             </section>
           </>
@@ -911,6 +1102,100 @@ export default function App() {
           </section>
         )}
       </main>
+
+      {(openTraceMessageId || streamingTraceMessageId) && (
+        <>
+          <div
+            className="trace-backdrop"
+            onClick={() => {
+              setOpenTraceMessageId(null);
+              setStreamingTraceMessageId(null);
+            }}
+            aria-hidden="true"
+          />
+          <aside className="trace-panel">
+            <div className="trace-panel-header">
+              <div>
+                <div className="trace-panel-title">
+                  {streamingTraceMessageId ? 'Thinking…' : 'Trace'}
+                </div>
+                <div className="trace-panel-subtitle">
+                  {messages.find((m) => m.id === (openTraceMessageId || streamingTraceMessageId))?.trace?.length ?? 0} events
+                  {streamingTraceMessageId && ' · streaming'}
+                </div>
+              </div>
+              <button
+                className="icon-button"
+                onClick={() => {
+                  setOpenTraceMessageId(null);
+                  setStreamingTraceMessageId(null);
+                }}
+                aria-label="Close trace panel"
+              >
+                ×
+              </button>
+            </div>
+            <div className="trace-panel-body">
+              {messages
+                .find((m) => m.id === (openTraceMessageId || streamingTraceMessageId))
+                ?.trace?.map((event) => (
+                  <div key={event.id} className={`trace-block ${event.type}`}>
+                    <div className="trace-block-header">
+                      <span className="trace-block-type">
+                        {event.type === 'reasoning' ? 'Thinking' : 'Tool Call'}
+                      </span>
+                    </div>
+                    <pre className="trace-block-content">{event.content}</pre>
+                  </div>
+                )) ?? <div className="trace-empty">No trace events</div>}
+            </div>
+          </aside>
+        </>
+      )}
+
+      {openSourcesMessageId && (
+        <>
+          <div
+            className="trace-backdrop"
+            onClick={() => setOpenSourcesMessageId(null)}
+            aria-hidden="true"
+          />
+          <aside className="sources-panel">
+            <div className="trace-panel-header">
+              <div>
+                <div className="trace-panel-title">Sources</div>
+                <div className="trace-panel-subtitle">
+                  {messages.find((m) => m.id === openSourcesMessageId)?.sources?.length ?? 0} sources
+                </div>
+              </div>
+              <button
+                className="icon-button"
+                onClick={() => setOpenSourcesMessageId(null)}
+                aria-label="Close sources panel"
+              >
+                ×
+              </button>
+            </div>
+            <div className="sources-panel-body">
+              {messages
+                .find((m) => m.id === openSourcesMessageId)
+                ?.sources?.map((source) => (
+                  <a
+                    key={source.id}
+                    href={source.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="source-item"
+                  >
+                    <div className="source-title">{source.title}</div>
+                    {source.snippet && <div className="source-snippet">{source.snippet}</div>}
+                    <div className="source-url">{source.url}</div>
+                  </a>
+                )) ?? <div className="trace-empty">No sources</div>}
+            </div>
+          </aside>
+        </>
+      )}
 
       {errorMessage && (
         <div className="toast" onClick={() => setErrorMessage(null)}>
