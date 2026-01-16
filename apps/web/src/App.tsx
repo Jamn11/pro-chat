@@ -3,6 +3,8 @@ import { useAuth } from '@clerk/clerk-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
+  cancelActiveStream,
+  checkActiveStream,
   createThread,
   deleteThread,
   fetchMemory,
@@ -10,6 +12,7 @@ import {
   fetchModels,
   fetchSettings,
   fetchThreads,
+  resumeStream,
   setAuthTokenGetter,
   streamChat,
   triggerMemoryExtraction,
@@ -18,7 +21,7 @@ import {
   uploadFiles,
 } from './api';
 import { AuthGuard, UserMenu } from './components/AuthGuard';
-import type { Attachment, ModelInfo, ThreadSummary, UIMessage } from './types';
+import type { ActiveStreamInfo, Attachment, ModelInfo, ThreadSummary, UIMessage } from './types';
 import './App.css';
 
 type Theme = 'light' | 'dark';
@@ -181,6 +184,8 @@ export default function App() {
   const [openTraceMessageId, setOpenTraceMessageId] = useState<string | null>(null);
   const [openSourcesMessageId, setOpenSourcesMessageId] = useState<string | null>(null);
   const [streamingTraceMessageId, setStreamingTraceMessageId] = useState<string | null>(null);
+  const [pendingStream, setPendingStream] = useState<ActiveStreamInfo | null>(null);
+  const [isResuming, setIsResuming] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const streamTimerRef = useRef<number | null>(null);
@@ -287,6 +292,7 @@ export default function App() {
 
   useEffect(() => {
     setAttachments([]);
+    setPendingStream(null);
     if (!activeThreadId) {
       setMessages([]);
       return;
@@ -303,6 +309,17 @@ export default function App() {
       .catch((error) =>
         setErrorMessage(error instanceof Error ? error.message : 'Failed to load messages'),
       );
+
+    // Check for pending/resumable stream
+    checkActiveStream(activeThreadId)
+      .then((result) => {
+        if (result.hasActiveStream && result.stream) {
+          setPendingStream(result.stream);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to check for active stream:', error);
+      });
   }, [activeThreadId]);
 
   useEffect(() => {
@@ -654,6 +671,200 @@ export default function App() {
     }
   };
 
+  const handleResume = async () => {
+    if (!pendingStream || isResuming || isStreaming) return;
+
+    setIsResuming(true);
+    setIsStreaming(true);
+    setStreamDuration(0);
+    streamingTraceRef.current = '';
+    lastReasoningLengthRef.current = 0;
+
+    const start = Date.now();
+    streamTimerRef.current = window.setInterval(() => {
+      setStreamDuration(Date.now() - start);
+    }, 100);
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    try {
+      await resumeStream(
+        pendingStream.id,
+        {
+          onCatchup: (data) => {
+            // Apply catchup data - update messages with real IDs and partial content
+            setMessages((prev) => {
+              const hasAssistantMsg = data.assistantMessageId
+                ? prev.some((m) => m.id === data.assistantMessageId)
+                : false;
+
+              if (hasAssistantMsg) {
+                // Update existing assistant message with partial content
+                return prev.map((m) => {
+                  if (m.id === data.assistantMessageId) {
+                    return {
+                      ...m,
+                      content: data.partialContent,
+                      trace: data.partialTrace ?? m.trace,
+                      status: 'streaming' as const,
+                    };
+                  }
+                  return m;
+                });
+              } else if (data.assistantMessageId) {
+                // Add streaming assistant message
+                return [
+                  ...prev,
+                  {
+                    id: data.assistantMessageId,
+                    role: 'assistant' as const,
+                    content: data.partialContent,
+                    trace: data.partialTrace,
+                    createdAt: new Date().toISOString(),
+                    status: 'streaming' as const,
+                  },
+                ];
+              }
+              return prev;
+            });
+
+            // Update streaming trace ref with existing content
+            if (data.partialTrace) {
+              const reasoning = data.partialTrace.find((t) => t.type === 'reasoning');
+              if (reasoning) {
+                streamingTraceRef.current = reasoning.content;
+                lastReasoningLengthRef.current = reasoning.content.length;
+              }
+            }
+          },
+          onDelta: (delta) => {
+            setMessages((prev) =>
+              prev.map((msg) => {
+                if (msg.status === 'streaming' && msg.role === 'assistant') {
+                  return { ...msg, content: `${msg.content}${delta}` };
+                }
+                return msg;
+              }),
+            );
+          },
+          onReasoning: (data) => {
+            const newLength = streamingTraceRef.current.length + data.delta.length;
+            if (newLength > lastReasoningLengthRef.current) {
+              streamingTraceRef.current += data.delta;
+              lastReasoningLengthRef.current = newLength;
+
+              const content = streamingTraceRef.current;
+              setMessages((prev) =>
+                prev.map((msg) => {
+                  if (msg.status !== 'streaming' || msg.role !== 'assistant') return msg;
+                  const trace = msg.trace ?? [];
+                  if (trace.length > 0 && trace[trace.length - 1].type === 'reasoning') {
+                    const last = trace[trace.length - 1];
+                    return {
+                      ...msg,
+                      trace: [...trace.slice(0, -1), { ...last, content }],
+                    };
+                  }
+                  return {
+                    ...msg,
+                    trace: [
+                      ...trace,
+                      {
+                        id: `trace-reasoning-resume-${Date.now()}`,
+                        type: 'reasoning' as const,
+                        content,
+                        createdAt: new Date().toISOString(),
+                      },
+                    ],
+                  };
+                }),
+              );
+            }
+          },
+          onTool: (data) => {
+            setMessages((prev) =>
+              prev.map((msg) => {
+                if (msg.status !== 'streaming' || msg.role !== 'assistant') return msg;
+                const trace = msg.trace ?? [];
+                return {
+                  ...msg,
+                  trace: [
+                    ...trace,
+                    {
+                      id: `trace-tool-${Date.now()}`,
+                      type: 'tool' as const,
+                      content: `Tool: ${data.name}`,
+                      createdAt: new Date().toISOString(),
+                    },
+                  ],
+                };
+              }),
+            );
+          },
+          onDone: (data) => {
+            setMessages((prev) =>
+              prev.map((msg) => {
+                if (msg.status === 'streaming' && msg.role === 'assistant') {
+                  return { ...data.assistantMessage, status: 'done' };
+                }
+                if (msg.id === data.userMessage.id) {
+                  return data.userMessage;
+                }
+                return msg;
+              }),
+            );
+            setThreads((prev) =>
+              prev.map((thread) => {
+                if (thread.id !== activeThreadId) return thread;
+                return {
+                  ...thread,
+                  totalCost: data.totalCost,
+                  updatedAt: new Date().toISOString(),
+                };
+              }),
+            );
+            setStreamingTraceMessageId(null);
+            fetchMemory()
+              .then((memory) => setMemoryContent(memory.content ?? ''))
+              .catch(() => {});
+          },
+          onError: (message) => {
+            setMessages((prev) =>
+              prev.map((msg) => {
+                if (msg.status === 'streaming' && msg.role === 'assistant') {
+                  return { ...msg, content: message, status: 'error' };
+                }
+                return msg;
+              }),
+            );
+            setStreamingTraceMessageId(null);
+          },
+        },
+        abortController.signal,
+      );
+    } catch (error) {
+      if (error instanceof Error && error.name !== 'AbortError') {
+        setErrorMessage(error instanceof Error ? error.message : 'Resume failed');
+      }
+    } finally {
+      if (streamTimerRef.current) {
+        window.clearInterval(streamTimerRef.current);
+        streamTimerRef.current = null;
+      }
+      abortControllerRef.current = null;
+      setIsStreaming(false);
+      setIsResuming(false);
+      setPendingStream(null);
+    }
+  };
+
+  const handleDiscardPendingStream = async () => {
+    if (!pendingStream) return;
+    await cancelActiveStream(pendingStream.id);
+    setPendingStream(null);
+  };
+
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = event.clipboardData?.items;
     if (!items) return;
@@ -830,7 +1041,30 @@ export default function App() {
             </header>
 
             <section className="messages">
-              {messages.length === 0 && (
+              {pendingStream && !isResuming && (
+                <div className="resume-banner">
+                  <div className="resume-banner-content">
+                    <span className="resume-banner-icon">⚡</span>
+                    <div className="resume-banner-text">
+                      <strong>Response interrupted</strong>
+                      <span>
+                        {pendingStream.partialContent.length > 0
+                          ? `${pendingStream.partialContent.length} characters generated`
+                          : 'Generation in progress'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="resume-banner-actions">
+                    <button className="button primary" onClick={handleResume}>
+                      Resume
+                    </button>
+                    <button className="button ghost" onClick={handleDiscardPendingStream}>
+                      Discard
+                    </button>
+                  </div>
+                </div>
+              )}
+              {messages.length === 0 && !pendingStream && (
                 <div className="empty-state">
                   <p>Start a conversation. Pick a model, attach files, and send a message.</p>
                 </div>

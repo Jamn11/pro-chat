@@ -1,24 +1,45 @@
 import { randomUUID } from 'crypto';
 import {
+  ActiveStreamRecord,
   AttachmentRecord,
   MessageRecord,
   ModelInfo,
+  StreamStatus,
   ThreadRecord,
   ThreadSummary,
+  ThinkingLevel,
+  TraceEvent,
 } from '../types';
 import {
   ChatRepository,
+  CreateActiveStreamInput,
   CreateAttachmentInput,
   CreateMessageInput,
   CreateThreadInput,
   SettingsRecord,
   UserRecord,
   UpsertUserFromClerkInput,
+  UpdateActiveStreamInput,
 } from './types';
 
 type InternalThread = ThreadRecord & { memoryCheckedAt: Date | null };
 
 type InternalUser = UserRecord;
+
+type InternalActiveStream = {
+  id: string;
+  threadId: string;
+  userMessageId: string;
+  assistantMessageId: string | null;
+  status: StreamStatus;
+  partialContent: string;
+  partialTrace: TraceEvent[] | null;
+  modelId: string;
+  thinkingLevel: ThinkingLevel | null;
+  startedAt: Date;
+  lastActivityAt: Date;
+  completedAt: Date | null;
+};
 
 export class InMemoryChatRepository implements ChatRepository {
   private users = new Map<string, InternalUser>();
@@ -26,6 +47,7 @@ export class InMemoryChatRepository implements ChatRepository {
   private threads = new Map<string, InternalThread>();
   private messages = new Map<string, MessageRecord>();
   private attachments = new Map<string, AttachmentRecord>();
+  private activeStreams = new Map<string, InternalActiveStream>();
 
   // User management (Clerk integration)
   async findUserByClerkId(clerkId: string): Promise<UserRecord | null> {
@@ -272,5 +294,82 @@ export class InMemoryChatRepository implements ChatRepository {
       thread.memoryCheckedAt = new Date();
       this.threads.set(threadId, thread);
     }
+  }
+
+  // Active stream methods
+
+  async createActiveStream(input: CreateActiveStreamInput): Promise<ActiveStreamRecord> {
+    const stream: InternalActiveStream = {
+      id: randomUUID(),
+      threadId: input.threadId,
+      userMessageId: input.userMessageId,
+      assistantMessageId: null,
+      status: 'active',
+      partialContent: '',
+      partialTrace: null,
+      modelId: input.modelId,
+      thinkingLevel: input.thinkingLevel ?? null,
+      startedAt: new Date(),
+      lastActivityAt: new Date(),
+      completedAt: null,
+    };
+    this.activeStreams.set(stream.id, stream);
+    return stream;
+  }
+
+  async getActiveStream(id: string): Promise<ActiveStreamRecord | null> {
+    return this.activeStreams.get(id) ?? null;
+  }
+
+  async getActiveStreamByThread(threadId: string): Promise<ActiveStreamRecord | null> {
+    const streams = [...this.activeStreams.values()].filter(
+      (s) => s.threadId === threadId && (s.status === 'active' || s.status === 'pending'),
+    );
+    if (streams.length === 0) return null;
+    // Return the most recent one
+    return streams.sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())[0];
+  }
+
+  async updateActiveStream(id: string, data: UpdateActiveStreamInput): Promise<ActiveStreamRecord> {
+    const stream = this.activeStreams.get(id);
+    if (!stream) throw new Error('Active stream not found');
+    const updated: InternalActiveStream = {
+      ...stream,
+      assistantMessageId: data.assistantMessageId ?? stream.assistantMessageId,
+      status: data.status ?? stream.status,
+      partialContent: data.partialContent ?? stream.partialContent,
+      partialTrace: data.partialTrace === undefined ? stream.partialTrace : data.partialTrace,
+      lastActivityAt: data.lastActivityAt ?? stream.lastActivityAt,
+      completedAt: data.completedAt ?? stream.completedAt,
+    };
+    this.activeStreams.set(id, updated);
+    return updated;
+  }
+
+  async deleteActiveStream(id: string): Promise<void> {
+    this.activeStreams.delete(id);
+  }
+
+  async findStaleActiveStreams(olderThan: Date): Promise<ActiveStreamRecord[]> {
+    return [...this.activeStreams.values()].filter(
+      (s) =>
+        (s.status === 'active' || s.status === 'pending') &&
+        s.lastActivityAt < olderThan,
+    );
+  }
+
+  async deleteOldActiveStreams(before: Date): Promise<number> {
+    let count = 0;
+    for (const [id, stream] of this.activeStreams) {
+      if (
+        (stream.status === 'completed' || stream.status === 'failed' || stream.status === 'cancelled') &&
+        stream.completedAt &&
+        stream.completedAt < before
+      ) {
+        this.activeStreams.delete(id);
+        count++;
+      }
+    }
+    return count;
   }
 }

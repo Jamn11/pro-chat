@@ -76,3 +76,19 @@ export type UploadAttachment = Attachment;
 export type UIMessage = Message & {
   status?: 'streaming' | 'error' | 'done';
 };
+
+export type ActiveStreamInfo = {
+  id: string;
+  userMessageId: string;
+  assistantMessageId: string | null;
+  partialContent: string;
+  partialTrace?: TraceEvent[] | null;
+  status: 'active' | 'pending';
+  startedAt: string;
+  lastActivityAt: string;
+};
+
+export type CheckActiveStreamResponse = {
+  hasActiveStream: boolean;
+  stream?: ActiveStreamInfo;
+};

@@ -1,8 +1,10 @@
 import {
+  ActiveStreamRecord,
   AttachmentRecord,
   MessageRecord,
   MessageSource,
   ModelInfo,
+  StreamStatus,
   ThreadRecord,
   ThreadSummary,
   ThinkingLevel,
@@ -62,6 +64,22 @@ export type CreateAttachmentInput = {
   kind: 'image' | 'file';
 };
 
+export type CreateActiveStreamInput = {
+  threadId: string;
+  userMessageId: string;
+  modelId: string;
+  thinkingLevel?: ThinkingLevel | null;
+};
+
+export type UpdateActiveStreamInput = {
+  assistantMessageId?: string | null;
+  status?: StreamStatus;
+  partialContent?: string;
+  partialTrace?: TraceEvent[] | null;
+  lastActivityAt?: Date;
+  completedAt?: Date | null;
+};
+
 export interface ChatRepository {
   // User management (Clerk integration)
   findUserByClerkId(clerkId: string): Promise<UserRecord | null>;
@@ -97,4 +115,13 @@ export interface ChatRepository {
   // Memory tracking methods (per-user)
   getThreadsForMemoryExtraction(userId: string): Promise<ThreadSummary[]>;
   markThreadMemoryChecked(threadId: string): Promise<void>;
+
+  // Active stream methods
+  createActiveStream(input: CreateActiveStreamInput): Promise<ActiveStreamRecord>;
+  getActiveStream(id: string): Promise<ActiveStreamRecord | null>;
+  getActiveStreamByThread(threadId: string): Promise<ActiveStreamRecord | null>;
+  updateActiveStream(id: string, data: UpdateActiveStreamInput): Promise<ActiveStreamRecord>;
+  deleteActiveStream(id: string): Promise<void>;
+  findStaleActiveStreams(olderThan: Date): Promise<ActiveStreamRecord[]>;
+  deleteOldActiveStreams(before: Date): Promise<number>;
 }

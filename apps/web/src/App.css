@@ -933,3 +933,63 @@
   width: 28px;
   height: 28px;
 }
+
+/* Resume Banner */
+.resume-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  background: var(--panel-muted);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  margin-bottom: 16px;
+}
+
+.resume-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.resume-banner-icon {
+  font-size: 1.5rem;
+}
+
+.resume-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.resume-banner-text strong {
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.resume-banner-text span {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.resume-banner-actions {
+  display: flex;
+  gap: 8px;
+}
+
+@media (max-width: 768px) {
+  .resume-banner {
+    flex-direction: column;
+    align-items: stretch;
+    text-align: center;
+  }
+
+  .resume-banner-content {
+    justify-content: center;
+  }
+
+  .resume-banner-actions {
+    justify-content: center;
+  }
+}

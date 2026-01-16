@@ -4,6 +4,8 @@ export type ChatRole = 'user' | 'assistant' | 'system';
 
 export type AttachmentKind = 'image' | 'file';
 
+export type StreamStatus = 'active' | 'pending' | 'completed' | 'failed' | 'cancelled';
+
 export type ModelInfo = {
   id: string;
   label: string;
@@ -70,4 +72,19 @@ export type ThreadSummary = {
 
 export type ThreadRecord = ThreadSummary & {
   createdAt: Date;
+};
+
+export type ActiveStreamRecord = {
+  id: string;
+  threadId: string;
+  userMessageId: string;
+  assistantMessageId: string | null;
+  status: StreamStatus;
+  partialContent: string;
+  partialTrace: TraceEvent[] | null;
+  modelId: string;
+  thinkingLevel: ThinkingLevel | null;
+  startedAt: Date;
+  lastActivityAt: Date;
+  completedAt: Date | null;
 };

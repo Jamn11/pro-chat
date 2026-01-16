@@ -10,6 +10,7 @@ import { ChatRepository } from './repositories/types';
 import { MemoryStore } from './services/memoryStore';
 import { MemoryExtractor } from './services/memoryExtractor';
 import { clerkAuthMiddleware, requireAuthentication, syncUserMiddleware, getUserId } from './middleware/clerkAuth';
+import { StreamTracker } from './services/streamTracker';
 
 const uploadSchema = z.object({
   threadId: z.string().min(1),
@@ -43,6 +44,10 @@ const streamSchema = z.object({
     .optional(),
 });
 
+const resumeSchema = z.object({
+  streamId: z.string().min(1),
+});
+
 const storageFilename = (originalName: string) =>
   `${Date.now()}-${randomUUID()}-${originalName.replace(/\s+/g, '_')}`;
 
@@ -53,6 +58,7 @@ export function createApp({
   memoryStore,
   memoryExtractor,
   traceRetentionDays,
+  streamTracker,
 }: {
   repo: ChatRepository;
   chatService: ChatService;
@@ -60,6 +66,7 @@ export function createApp({
   memoryStore?: MemoryStore;
   memoryExtractor?: MemoryExtractor;
   traceRetentionDays?: number;
+  streamTracker?: StreamTracker;
 }) {
   const app = express();
 
@@ -226,6 +233,40 @@ export function createApp({
     }
   });
 
+  // Check for active/pending stream on a thread
+  app.get('/api/threads/:id/active-stream', async (req, res, next) => {
+    try {
+      if (!streamTracker) {
+        res.json({ hasActiveStream: false });
+        return;
+      }
+
+      const threadId = req.params.id;
+      const stream = await streamTracker.findResumableStream(threadId);
+
+      if (!stream) {
+        res.json({ hasActiveStream: false });
+        return;
+      }
+
+      res.json({
+        hasActiveStream: true,
+        stream: {
+          id: stream.id,
+          userMessageId: stream.userMessageId,
+          assistantMessageId: stream.assistantMessageId,
+          partialContent: stream.partialContent,
+          partialTrace: stream.partialTrace,
+          status: stream.status,
+          startedAt: stream.startedAt.toISOString(),
+          lastActivityAt: stream.lastActivityAt.toISOString(),
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get('/api/attachments/:id', async (req, res, next) => {
     try {
       const [attachment] = await repo.getAttachmentsByIds([req.params.id]);
@@ -271,6 +312,8 @@ export function createApp({
 
   app.post('/api/chat/stream', async (req, res, next) => {
     let sendEvent: ((event: string, data: unknown) => void) | null = null;
+    let currentStreamId: string | undefined;
+
     try {
       const userId = getUserId(req);
       const parsed = streamSchema.parse(req.body);
@@ -293,11 +336,24 @@ export function createApp({
       sendEvent('meta', { threadId: parsed.threadId, modelId: parsed.modelId });
 
       const abortController = new AbortController();
-      const abortStream = () => {
-        if (!res.writableEnded) {
+      let streamAborted = false;
+
+      const abortStream = async () => {
+        if (!res.writableEnded && !streamAborted) {
+          streamAborted = true;
           abortController.abort();
+
+          // Mark stream as pending if we have a stream ID (client disconnected)
+          if (currentStreamId && streamTracker) {
+            try {
+              await streamTracker.markPending(currentStreamId);
+            } catch (err) {
+              console.error('Failed to mark stream as pending:', err);
+            }
+          }
         }
       };
+
       req.on('aborted', abortStream);
       res.on('close', abortStream);
 
@@ -313,6 +369,111 @@ export function createApp({
         },
         (chunk) => {
           sendEvent?.('delta', { content: chunk });
+        },
+        abortController.signal,
+        {
+          onToolStart: (toolName) => {
+            sendEvent?.('tool', { name: toolName });
+          },
+          onReasoning: (delta) => {
+            sendEvent?.('reasoning', { delta });
+          },
+        },
+      );
+
+      // Store stream ID for potential abort handling
+      currentStreamId = result.streamId;
+
+      // Send stream ID in meta if available (for resume support)
+      if (result.streamId) {
+        sendEvent('streamId', { streamId: result.streamId });
+      }
+
+      sendEvent('done', {
+        userMessage: result.userMessage,
+        assistantMessage: result.assistantMessage,
+        totalCost: result.totalCost,
+        promptTokens: result.promptTokens,
+        completionTokens: result.completionTokens,
+        durationMs: result.durationMs,
+      });
+      res.end();
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        // Stream was aborted (client disconnected) - already marked as pending
+        res.end();
+        return;
+      }
+
+      // Mark stream as failed on error
+      if (currentStreamId && streamTracker) {
+        try {
+          await streamTracker.failStream(currentStreamId);
+        } catch (err) {
+          console.error('Failed to mark stream as failed:', err);
+        }
+      }
+
+      if (sendEvent) {
+        sendEvent('error', { message: error instanceof Error ? error.message : 'Unknown error' });
+        res.end();
+        return;
+      }
+      next(error);
+    }
+  });
+
+  // Resume a pending stream
+  app.post('/api/chat/resume', async (req, res, next) => {
+    let sendEvent: ((event: string, data: unknown) => void) | null = null;
+
+    try {
+      const parsed = resumeSchema.parse(req.body);
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      if (typeof res.flushHeaders === 'function') {
+        res.flushHeaders();
+      }
+
+      sendEvent = (event: string, data: unknown) => {
+        res.write(`event: ${event}\n`);
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      };
+
+      const abortController = new AbortController();
+      let streamAborted = false;
+
+      const abortStream = async () => {
+        if (!res.writableEnded && !streamAborted) {
+          streamAborted = true;
+          abortController.abort();
+
+          // Mark stream as pending again if aborted during resume
+          if (streamTracker) {
+            try {
+              await streamTracker.markPending(parsed.streamId);
+            } catch (err) {
+              console.error('Failed to mark stream as pending:', err);
+            }
+          }
+        }
+      };
+
+      req.on('aborted', abortStream);
+      res.on('close', abortStream);
+
+      const result = await chatService.resumeStream(
+        parsed.streamId,
+        (chunk) => {
+          sendEvent?.('delta', { content: chunk });
+        },
+        (catchupData) => {
+          sendEvent?.('catchup', catchupData);
         },
         abortController.signal,
         {

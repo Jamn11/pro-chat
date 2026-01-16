@@ -11,6 +11,8 @@ import { PythonTool } from './services/pythonTool';
 import { BraveSearchProvider } from './services/braveSearchProvider';
 import { SearchTool } from './services/searchTool';
 import { WebFetchTool } from './services/webFetchTool';
+import { StreamTracker } from './services/streamTracker';
+import { startStreamCleanupJob } from './services/streamCleanup';
 
 const repository = new PrismaChatRepository();
 
@@ -59,11 +61,15 @@ const webFetchTool = new WebFetchTool({
     : undefined,
 });
 
+// Stream tracking for resume support
+const streamTracker = new StreamTracker(repository);
+
 const chatService = new ChatService(repository, openRouter, storageRoot, {
   memoryStore,
   pythonTool,
   searchTool,
   webFetchTool,
+  streamTracker,
   maxToolIterations: 30,
   tracePolicy: {
     maxEvents: env.TRACE_MAX_EVENTS,
@@ -84,12 +90,16 @@ const app = createApp({
   memoryStore,
   memoryExtractor,
   traceRetentionDays: env.TRACE_RETENTION_DAYS,
+  streamTracker,
 });
 
 async function bootstrap() {
   // Users are now created on-demand when they authenticate with Clerk
   await repository.upsertModels(MODEL_SEED);
   await memoryStore.ensureExists();
+
+  // Start background cleanup job for stale streams
+  startStreamCleanupJob(streamTracker);
 
   app.listen(env.PORT, () => {
     console.log(`API listening on http://localhost:${env.PORT}`);

@@ -1,4 +1,14 @@
-import type { Memory, MemoryExtractionResult, Message, ModelInfo, Settings, ThreadSummary, UploadAttachment } from './types';
+import type {
+  CheckActiveStreamResponse,
+  Memory,
+  MemoryExtractionResult,
+  Message,
+  ModelInfo,
+  Settings,
+  ThreadSummary,
+  TraceEvent,
+  UploadAttachment,
+} from './types';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
@@ -126,9 +136,16 @@ export async function uploadFiles(threadId: string, files: FileList): Promise<Up
 
 export type StreamCallbacks = {
   onMeta?: (data: { threadId: string; modelId: string }) => void;
+  onStreamId?: (data: { streamId: string }) => void;
   onDelta?: (delta: string) => void;
   onTool?: (data: { name: string }) => void;
   onReasoning?: (data: { delta: string }) => void;
+  onCatchup?: (data: {
+    userMessageId: string;
+    assistantMessageId: string | null;
+    partialContent: string;
+    partialTrace?: TraceEvent[] | null;
+  }) => void;
   onDone?: (data: {
     userMessage: Message;
     assistantMessage: Message;
@@ -199,6 +216,69 @@ export async function streamChat(
       if (data) {
         const parsed = JSON.parse(data);
         if (event === 'meta') callbacks.onMeta?.(parsed);
+        if (event === 'streamId') callbacks.onStreamId?.(parsed);
+        if (event === 'delta') callbacks.onDelta?.(parsed.content);
+        if (event === 'tool') callbacks.onTool?.(parsed);
+        if (event === 'reasoning') callbacks.onReasoning?.(parsed);
+        if (event === 'catchup') callbacks.onCatchup?.(parsed);
+        if (event === 'done') callbacks.onDone?.(parsed);
+        if (event === 'error') callbacks.onError?.(parsed.message);
+      }
+      boundary = buffer.indexOf('\n\n');
+    }
+  }
+}
+
+export async function checkActiveStream(threadId: string): Promise<CheckActiveStreamResponse> {
+  const res = await fetch(`/api/threads/${threadId}/active-stream`);
+  return handleJson<CheckActiveStreamResponse>(res);
+}
+
+export async function resumeStream(
+  streamId: string,
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal,
+) {
+  const response = await fetch('/api/chat/resume', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ streamId }),
+    signal,
+  });
+
+  if (!response.ok || !response.body) {
+    const text = await response.text();
+    throw new Error(text || 'Resume stream failed');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  let done = false;
+  while (!done) {
+    const { value, done: readerDone } = await reader.read();
+    done = readerDone;
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let boundary = buffer.indexOf('\n\n');
+    while (boundary !== -1) {
+      const chunk = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const lines = chunk.split('\n');
+      let event = 'message';
+      let data = '';
+      for (const line of lines) {
+        if (line.startsWith('event:')) {
+          event = line.replace('event:', '').trim();
+        } else if (line.startsWith('data:')) {
+          data += line.replace('data:', '').trim();
+        }
+      }
+
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (event === 'catchup') callbacks.onCatchup?.(parsed);
         if (event === 'delta') callbacks.onDelta?.(parsed.content);
         if (event === 'tool') callbacks.onTool?.(parsed);
         if (event === 'reasoning') callbacks.onReasoning?.(parsed);
@@ -208,4 +288,10 @@ export async function streamChat(
       boundary = buffer.indexOf('\n\n');
     }
   }
+}
+
+export async function cancelActiveStream(streamId: string): Promise<void> {
+  // We don't have a dedicated cancel endpoint yet, so this is a no-op
+  // The stream will eventually timeout and be marked as failed
+  console.log('Cancel stream requested:', streamId);
 }

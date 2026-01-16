@@ -21,6 +21,7 @@ import {
 import { PYTHON_TOOL_NAME, PythonTool, pythonToolDefinition } from './pythonTool';
 import { SEARCH_TOOL_NAME, SearchTool, searchToolDefinition } from './searchTool';
 import { WEB_FETCH_TOOL_NAME, WebFetchTool, webFetchToolDefinition } from './webFetchTool';
+import { StreamTracker } from './streamTracker';
 
 export type SendMessageInput = {
   userId: string;
@@ -50,6 +51,7 @@ export type SendMessageResult = {
   promptTokens?: number;
   completionTokens?: number;
   durationMs: number;
+  streamId?: string;
 };
 
 type ChatServiceOptions = {
@@ -59,6 +61,7 @@ type ChatServiceOptions = {
   webFetchTool?: WebFetchTool;
   maxToolIterations?: number;
   tracePolicy?: Partial<TracePolicy>;
+  streamTracker?: StreamTracker;
 };
 
 type TracePolicy = {
@@ -242,8 +245,288 @@ ${firstMessage.slice(0, 500)}`;
     const tools = toolHandlers.map((handler) => handler.definition);
     const maxToolIterations = this.options.maxToolIterations ?? 4;
 
+    // Start stream tracking if tracker is available
+    let streamId: string | undefined;
+    let assistantMessageId: string | undefined;
+    const streamTracker = this.options.streamTracker;
+
+    if (streamTracker) {
+      const stream = await streamTracker.startStream({
+        threadId: input.threadId,
+        userMessageId: userMessage.id,
+        modelId: model.id,
+        thinkingLevel: input.thinkingLevel,
+      });
+      streamId = stream.id;
+
+      // Create assistant message early with empty content
+      const earlyAssistantMsg = await this.repo.createMessage({
+        threadId: input.threadId,
+        role: 'assistant',
+        content: '',
+        modelId: model.id,
+        thinkingLevel: input.thinkingLevel ?? null,
+      });
+      assistantMessageId = earlyAssistantMsg.id;
+
+      // Link the assistant message to the stream
+      await streamTracker.setAssistantMessageId(streamId, assistantMessageId);
+    }
+
     let promptTokens = 0;
     let completionTokens = 0;
+    let finalContent = '';
+    let accumulatedContent = '';
+    let iterations = 0;
+
+    const handleReasoning = (delta: string) => {
+      if (delta) {
+        trace = appendTraceEvent(
+          trace,
+          createTraceEvent('reasoning', delta),
+          tracePolicy,
+        );
+      }
+      callbacks?.onReasoning?.(delta);
+    };
+
+    const handleToolStart = (toolName: string) => {
+      trace = appendTraceEvent(
+        trace,
+        createTraceEvent('tool', `Tool: ${toolName}`),
+        tracePolicy,
+      );
+      callbacks?.onToolStart?.(toolName);
+    };
+
+    const handleToolResult = (toolName: string, result: string) => {
+      const nextSources = extractSourcesFromToolResult(
+        toolName,
+        result,
+        tracePolicy.maxSourceSnippetChars,
+      );
+      if (nextSources.length > 0) {
+        sources = appendSources(sources, nextSources, tracePolicy);
+      }
+      callbacks?.onToolResult?.(toolName, result);
+    };
+
+    // Wrap onDelta to track content for stream persistence
+    const wrappedOnDelta = (delta: string) => {
+      accumulatedContent += delta;
+      onDelta(delta);
+
+      // Update stream progress (debounced internally)
+      if (streamTracker && streamId) {
+        streamTracker.updateProgress(streamId, accumulatedContent, trace).catch(console.error);
+      }
+    };
+
+    while (iterations <= maxToolIterations) {
+      const result = await this.openRouter.streamChat(
+        {
+          model: model.id,
+          messages: openRouterMessages,
+          reasoning,
+          maxTokens,
+          tools,
+          toolChoice: tools.length > 0 ? 'auto' : undefined,
+          signal,
+        },
+        {
+          onDelta: wrappedOnDelta,
+          onReasoning: handleReasoning,
+        },
+      );
+
+      promptTokens += result.usage?.prompt_tokens ?? 0;
+      completionTokens += result.usage?.completion_tokens ?? 0;
+
+      const toolCalls = result.toolCalls ?? [];
+      if (toolCalls.length === 0) {
+        finalContent = result.content;
+        break;
+      }
+
+      if (toolHandlers.length === 0) {
+        throw new Error('Tool call requested but no tools are configured.');
+      }
+
+      openRouterMessages.push({
+        role: 'assistant',
+        content: result.content ?? '',
+        tool_calls: toolCalls,
+      });
+
+      const toolMessages = await this.runToolCalls(toolHandlers, toolCalls, {
+        onToolStart: handleToolStart,
+        onToolResult: handleToolResult,
+      });
+      openRouterMessages.push(...toolMessages);
+
+      iterations += 1;
+    }
+
+    if (!finalContent && iterations > maxToolIterations) {
+      // Mark stream as failed before throwing
+      if (streamTracker && streamId) {
+        await streamTracker.failStream(streamId);
+      }
+      throw new Error('Tool call limit exceeded.');
+    }
+
+    const durationMs = Date.now() - start;
+    const cost = calculateCost(promptTokens, completionTokens, model);
+
+    let assistantMessage: MessageRecord;
+
+    if (streamTracker && assistantMessageId) {
+      // Update the early-created assistant message with final content
+      assistantMessage = await this.repo.updateMessage(assistantMessageId, {
+        content: finalContent,
+        durationMs,
+        promptTokens: promptTokens || null,
+        completionTokens: completionTokens || null,
+        cost,
+        trace: trace.length > 0 ? trace : null,
+        sources: sources.length > 0 ? sources : null,
+      });
+
+      // Mark stream as complete
+      await streamTracker.completeStream(streamId!);
+    } else {
+      // No stream tracking - create message as before
+      assistantMessage = await this.repo.createMessage({
+        threadId: input.threadId,
+        role: 'assistant',
+        content: finalContent,
+        modelId: model.id,
+        thinkingLevel: input.thinkingLevel ?? null,
+        durationMs,
+        promptTokens: promptTokens || null,
+        completionTokens: completionTokens || null,
+        cost,
+        trace: trace.length > 0 ? trace : null,
+        sources: sources.length > 0 ? sources : null,
+      });
+    }
+
+    const totalCost = await this.repo.incrementThreadCost(input.threadId, cost);
+
+    return {
+      userMessage,
+      assistantMessage,
+      totalCost,
+      promptTokens: promptTokens || undefined,
+      completionTokens: completionTokens || undefined,
+      durationMs,
+      streamId,
+    };
+  }
+
+  /**
+   * Resume a pending stream that was interrupted (e.g., by page refresh)
+   */
+  async resumeStream(
+    streamId: string,
+    onDelta: (chunk: string) => void,
+    onCatchup: (data: {
+      userMessageId: string;
+      assistantMessageId: string | null;
+      partialContent: string;
+      partialTrace: TraceEvent[] | null;
+    }) => void,
+    signal?: AbortSignal,
+    callbacks?: SendMessageCallbacks,
+  ): Promise<SendMessageResult> {
+    const streamTracker = this.options.streamTracker;
+    if (!streamTracker) {
+      throw new Error('Stream tracker not configured');
+    }
+
+    const stream = await streamTracker.getStream(streamId);
+    if (!stream) {
+      throw new Error('Stream not found');
+    }
+
+    if (stream.status !== 'pending') {
+      throw new Error(`Stream is not resumable (status: ${stream.status})`);
+    }
+
+    // Send catchup event with existing partial content
+    onCatchup({
+      userMessageId: stream.userMessageId,
+      assistantMessageId: stream.assistantMessageId,
+      partialContent: stream.partialContent,
+      partialTrace: stream.partialTrace,
+    });
+
+    // Load thread context
+    const modelList = await this.repo.listModels();
+    const model = modelList.find((m) => m.id === stream.modelId);
+    if (!model) {
+      await streamTracker.failStream(streamId);
+      throw new Error('Model not found');
+    }
+
+    const settings = await this.repo.getSettings();
+    const history = await this.repo.getThreadMessages(stream.threadId);
+    const systemPrompt = settings.systemPrompt?.trim();
+    const memory = await this.options.memoryStore?.read();
+    const tracePolicy = resolveTracePolicy(this.options.tracePolicy);
+
+    // Build conversation history up to the interrupted point
+    const openRouterMessages: OpenRouterMessage[] = [];
+    if (systemPrompt) {
+      openRouterMessages.push({ role: 'system', content: systemPrompt });
+    }
+    if (memory) {
+      openRouterMessages.push({
+        role: 'system',
+        content: `Memory:\n${memory}`,
+      });
+    }
+
+    // Add all messages except the in-progress assistant message
+    for (const message of history) {
+      if (message.id === stream.assistantMessageId) continue; // Skip the in-progress message
+      if (message.role === 'user') {
+        openRouterMessages.push({ role: 'user', content: message.content });
+      } else if (message.role === 'assistant') {
+        openRouterMessages.push({ role: 'assistant', content: message.content });
+      }
+    }
+
+    // Add the partial response as context for continuation
+    if (stream.partialContent) {
+      openRouterMessages.push({
+        role: 'assistant',
+        content: stream.partialContent,
+      });
+      // Add instruction to continue
+      openRouterMessages.push({
+        role: 'user',
+        content: '[System: Your previous response was interrupted. Please continue from where you left off. Do not repeat what you already wrote, just continue naturally.]',
+      });
+    }
+
+    // Mark stream as active again
+    await this.repo.updateActiveStream(streamId, {
+      status: 'active',
+      lastActivityAt: new Date(),
+    });
+
+    const start = Date.now();
+    const { reasoning, maxTokens } = resolveThinkingConfig(model, stream.thinkingLevel ?? null);
+    const toolHandlers = this.getToolHandlers();
+    const tools = toolHandlers.map((handler) => handler.definition);
+    const maxToolIterations = this.options.maxToolIterations ?? 4;
+
+    let promptTokens = 0;
+    let completionTokens = 0;
+    let accumulatedContent = stream.partialContent;
+    let trace: TraceEvent[] = stream.partialTrace ?? [];
+    let sources: MessageSource[] = [];
     let finalContent = '';
     let iterations = 0;
 
@@ -279,6 +562,14 @@ ${firstMessage.slice(0, 500)}`;
       callbacks?.onToolResult?.(toolName, result);
     };
 
+    const wrappedOnDelta = (delta: string) => {
+      accumulatedContent += delta;
+      onDelta(delta);
+
+      // Update stream progress
+      streamTracker.updateProgress(streamId, accumulatedContent, trace).catch(console.error);
+    };
+
     while (iterations <= maxToolIterations) {
       const result = await this.openRouter.streamChat(
         {
@@ -291,7 +582,7 @@ ${firstMessage.slice(0, 500)}`;
           signal,
         },
         {
-          onDelta,
+          onDelta: wrappedOnDelta,
           onReasoning: handleReasoning,
         },
       );
@@ -301,7 +592,8 @@ ${firstMessage.slice(0, 500)}`;
 
       const toolCalls = result.toolCalls ?? [];
       if (toolCalls.length === 0) {
-        finalContent = result.content;
+        // Combine partial content with continuation
+        finalContent = accumulatedContent;
         break;
       }
 
@@ -325,27 +617,53 @@ ${firstMessage.slice(0, 500)}`;
     }
 
     if (!finalContent && iterations > maxToolIterations) {
+      await streamTracker.failStream(streamId);
       throw new Error('Tool call limit exceeded.');
     }
 
     const durationMs = Date.now() - start;
     const cost = calculateCost(promptTokens, completionTokens, model);
 
-    const assistantMessage = await this.repo.createMessage({
-      threadId: input.threadId,
-      role: 'assistant',
-      content: finalContent,
-      modelId: model.id,
-      thinkingLevel: input.thinkingLevel ?? null,
-      durationMs,
-      promptTokens: promptTokens || null,
-      completionTokens: completionTokens || null,
-      cost,
-      trace: trace.length > 0 ? trace : null,
-      sources: sources.length > 0 ? sources : null,
-    });
+    // Update the assistant message with combined content
+    let assistantMessage: MessageRecord;
+    if (stream.assistantMessageId) {
+      assistantMessage = await this.repo.updateMessage(stream.assistantMessageId, {
+        content: finalContent,
+        durationMs,
+        promptTokens: promptTokens || null,
+        completionTokens: completionTokens || null,
+        cost,
+        trace: trace.length > 0 ? trace : null,
+        sources: sources.length > 0 ? sources : null,
+      });
+    } else {
+      // Should not happen, but handle gracefully
+      assistantMessage = await this.repo.createMessage({
+        threadId: stream.threadId,
+        role: 'assistant',
+        content: finalContent,
+        modelId: model.id,
+        thinkingLevel: stream.thinkingLevel,
+        durationMs,
+        promptTokens: promptTokens || null,
+        completionTokens: completionTokens || null,
+        cost,
+        trace: trace.length > 0 ? trace : null,
+        sources: sources.length > 0 ? sources : null,
+      });
+    }
 
-    const totalCost = await this.repo.incrementThreadCost(input.threadId, cost);
+    // Mark stream as complete
+    await streamTracker.completeStream(streamId);
+
+    const totalCost = await this.repo.incrementThreadCost(stream.threadId, cost);
+
+    // Get the user message for the result
+    const messages = await this.repo.getThreadMessages(stream.threadId);
+    const userMessage = messages.find((m) => m.id === stream.userMessageId);
+    if (!userMessage) {
+      throw new Error('User message not found');
+    }
 
     return {
       userMessage,
@@ -354,6 +672,7 @@ ${firstMessage.slice(0, 500)}`;
       promptTokens: promptTokens || undefined,
       completionTokens: completionTokens || undefined,
       durationMs,
+      streamId,
     };
   }
 

@@ -1,5 +1,6 @@
 import { Prisma, PrismaClient } from '@prisma/client';
 import {
+  ActiveStreamRecord,
   AttachmentRecord,
   MessageRecord,
   MessageSource,
@@ -10,12 +11,14 @@ import {
 } from '../types';
 import {
   ChatRepository,
+  CreateActiveStreamInput,
   CreateAttachmentInput,
   CreateMessageInput,
   CreateThreadInput,
   SettingsRecord,
   UserRecord,
   UpsertUserFromClerkInput,
+  UpdateActiveStreamInput,
 } from './types';
 
 export class PrismaChatRepository implements ChatRepository {
@@ -399,6 +402,146 @@ export class PrismaChatRepository implements ChatRepository {
       where: { id: threadId },
       data: { memoryCheckedAt: new Date() },
     });
+  }
+
+  // Active stream methods
+
+  async createActiveStream(input: CreateActiveStreamInput): Promise<ActiveStreamRecord> {
+    const stream = await this.prisma.activeStream.create({
+      data: {
+        threadId: input.threadId,
+        userMessageId: input.userMessageId,
+        modelId: input.modelId,
+        thinkingLevel: input.thinkingLevel ?? null,
+      },
+    });
+    return {
+      id: stream.id,
+      threadId: stream.threadId,
+      userMessageId: stream.userMessageId,
+      assistantMessageId: stream.assistantMessageId,
+      status: stream.status,
+      partialContent: stream.partialContent,
+      partialTrace: parseTrace(stream.partialTrace),
+      modelId: stream.modelId,
+      thinkingLevel: stream.thinkingLevel,
+      startedAt: stream.startedAt,
+      lastActivityAt: stream.lastActivityAt,
+      completedAt: stream.completedAt,
+    };
+  }
+
+  async getActiveStream(id: string): Promise<ActiveStreamRecord | null> {
+    const stream = await this.prisma.activeStream.findUnique({
+      where: { id },
+    });
+    if (!stream) return null;
+    return {
+      id: stream.id,
+      threadId: stream.threadId,
+      userMessageId: stream.userMessageId,
+      assistantMessageId: stream.assistantMessageId,
+      status: stream.status,
+      partialContent: stream.partialContent,
+      partialTrace: parseTrace(stream.partialTrace),
+      modelId: stream.modelId,
+      thinkingLevel: stream.thinkingLevel,
+      startedAt: stream.startedAt,
+      lastActivityAt: stream.lastActivityAt,
+      completedAt: stream.completedAt,
+    };
+  }
+
+  async getActiveStreamByThread(threadId: string): Promise<ActiveStreamRecord | null> {
+    const stream = await this.prisma.activeStream.findFirst({
+      where: {
+        threadId,
+        status: { in: ['active', 'pending'] },
+      },
+      orderBy: { startedAt: 'desc' },
+    });
+    if (!stream) return null;
+    return {
+      id: stream.id,
+      threadId: stream.threadId,
+      userMessageId: stream.userMessageId,
+      assistantMessageId: stream.assistantMessageId,
+      status: stream.status,
+      partialContent: stream.partialContent,
+      partialTrace: parseTrace(stream.partialTrace),
+      modelId: stream.modelId,
+      thinkingLevel: stream.thinkingLevel,
+      startedAt: stream.startedAt,
+      lastActivityAt: stream.lastActivityAt,
+      completedAt: stream.completedAt,
+    };
+  }
+
+  async updateActiveStream(id: string, data: UpdateActiveStreamInput): Promise<ActiveStreamRecord> {
+    const stream = await this.prisma.activeStream.update({
+      where: { id },
+      data: {
+        assistantMessageId: data.assistantMessageId ?? undefined,
+        status: data.status ?? undefined,
+        partialContent: data.partialContent ?? undefined,
+        partialTrace: data.partialTrace === undefined ? undefined : data.partialTrace ?? Prisma.DbNull,
+        lastActivityAt: data.lastActivityAt ?? undefined,
+        completedAt: data.completedAt ?? undefined,
+      },
+    });
+    return {
+      id: stream.id,
+      threadId: stream.threadId,
+      userMessageId: stream.userMessageId,
+      assistantMessageId: stream.assistantMessageId,
+      status: stream.status,
+      partialContent: stream.partialContent,
+      partialTrace: parseTrace(stream.partialTrace),
+      modelId: stream.modelId,
+      thinkingLevel: stream.thinkingLevel,
+      startedAt: stream.startedAt,
+      lastActivityAt: stream.lastActivityAt,
+      completedAt: stream.completedAt,
+    };
+  }
+
+  async deleteActiveStream(id: string): Promise<void> {
+    await this.prisma.activeStream.delete({
+      where: { id },
+    });
+  }
+
+  async findStaleActiveStreams(olderThan: Date): Promise<ActiveStreamRecord[]> {
+    const streams = await this.prisma.activeStream.findMany({
+      where: {
+        status: { in: ['active', 'pending'] },
+        lastActivityAt: { lt: olderThan },
+      },
+    });
+    return streams.map((stream) => ({
+      id: stream.id,
+      threadId: stream.threadId,
+      userMessageId: stream.userMessageId,
+      assistantMessageId: stream.assistantMessageId,
+      status: stream.status,
+      partialContent: stream.partialContent,
+      partialTrace: parseTrace(stream.partialTrace),
+      modelId: stream.modelId,
+      thinkingLevel: stream.thinkingLevel,
+      startedAt: stream.startedAt,
+      lastActivityAt: stream.lastActivityAt,
+      completedAt: stream.completedAt,
+    }));
+  }
+
+  async deleteOldActiveStreams(before: Date): Promise<number> {
+    const result = await this.prisma.activeStream.deleteMany({
+      where: {
+        status: { in: ['completed', 'failed', 'cancelled'] },
+        completedAt: { lt: before },
+      },
+    });
+    return result.count;
   }
 }
 
