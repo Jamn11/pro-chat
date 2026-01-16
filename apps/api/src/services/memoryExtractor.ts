@@ -111,8 +111,8 @@ export class MemoryExtractor {
     }
   }
 
-  async extractFromUncheckedThreads(): Promise<MemoryExtractionSummary> {
-    const threads = await this.repo.getThreadsForMemoryExtraction();
+  async extractFromUncheckedThreads(userId: string): Promise<MemoryExtractionSummary> {
+    const threads = await this.repo.getThreadsForMemoryExtraction(userId);
     const results: MemoryExtractionResult[] = [];
     let memoriesAdded = 0;
     let skipped = 0;

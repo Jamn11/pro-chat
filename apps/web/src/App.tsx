@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAuth } from '@clerk/clerk-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -9,12 +10,14 @@ import {
   fetchModels,
   fetchSettings,
   fetchThreads,
+  setAuthTokenGetter,
   streamChat,
   triggerMemoryExtraction,
   updateMemory,
   updateSettings,
   uploadFiles,
 } from './api';
+import { AuthGuard, UserMenu } from './components/AuthGuard';
 import type { Attachment, ModelInfo, ThreadSummary, UIMessage } from './types';
 import './App.css';
 
@@ -150,6 +153,7 @@ function PreBlock({ children, ...props }: PreBlockProps) {
 }
 
 export default function App() {
+  const { getToken, isLoaded: isAuthLoaded } = useAuth();
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<UIMessage[]>([]);
@@ -249,7 +253,15 @@ export default function App() {
     activeThreadIdRef.current = activeThreadId;
   }, [activeThreadId]);
 
+  // Set up auth token getter for API calls
   useEffect(() => {
+    setAuthTokenGetter(getToken);
+  }, [getToken]);
+
+  // Load initial data once auth is ready
+  useEffect(() => {
+    if (!isAuthLoaded) return;
+
     async function load() {
       const [modelList, threadList, settings, memory] = await Promise.all([
         fetchModels(),
@@ -271,7 +283,7 @@ export default function App() {
     load().catch((error) => {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to load');
     });
-  }, []);
+  }, [isAuthLoaded]);
 
   useEffect(() => {
     setAttachments([]);
@@ -717,34 +729,38 @@ export default function App() {
   };
 
   return (
-    <div
-      className={`app ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${
-        isDragActive ? 'drag-active' : ''
-      }`}
-      onDragEnter={handleDragEnter}
-      onDragLeave={handleDragLeave}
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
-    >
-      {isDragActive && (
-        <div className="drop-overlay" aria-hidden="true">
-          Drop files to attach
-        </div>
-      )}
-      <aside
-        className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}
-        aria-hidden={sidebarCollapsed}
+    <AuthGuard>
+      <div
+        className={`app ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${
+          isDragActive ? 'drag-active' : ''
+        }`}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
       >
-        <div className="sidebar-top">
-          <div className="brand">{sidebarCollapsed ? 'pc' : 'pro-chat'}</div>
-          <button
-            className="icon-button"
-            onClick={() => setSidebarCollapsed((prev) => !prev)}
-            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {sidebarCollapsed ? '>' : '<'}
-          </button>
-        </div>
+        {isDragActive && (
+          <div className="drop-overlay" aria-hidden="true">
+            Drop files to attach
+          </div>
+        )}
+        <aside
+          className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}
+          aria-hidden={sidebarCollapsed}
+        >
+          <div className="sidebar-top">
+            <div className="brand">{sidebarCollapsed ? 'pc' : 'pro-chat'}</div>
+            <div className="sidebar-actions">
+              <UserMenu />
+              <button
+                className="icon-button"
+                onClick={() => setSidebarCollapsed((prev) => !prev)}
+                aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              >
+                {sidebarCollapsed ? '>' : '<'}
+              </button>
+            </div>
+          </div>
         <button className="button primary" onClick={handleNewThread}>
           {sidebarCollapsed ? '+' : 'New Chat'}
         </button>
@@ -1199,11 +1215,12 @@ export default function App() {
         </>
       )}
 
-      {errorMessage && (
-        <div className="toast" onClick={() => setErrorMessage(null)}>
-          {errorMessage}
-        </div>
-      )}
-    </div>
+        {errorMessage && (
+          <div className="toast" onClick={() => setErrorMessage(null)}>
+            {errorMessage}
+          </div>
+        )}
+      </div>
+    </AuthGuard>
   );
 }

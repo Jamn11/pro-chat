@@ -2,6 +2,31 @@ import type { Memory, MemoryExtractionResult, Message, ModelInfo, Settings, Thre
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
+// Auth token getter - set by the app when ClerkProvider is ready
+let getAuthToken: (() => Promise<string | null>) | null = null;
+
+export function setAuthTokenGetter(getter: () => Promise<string | null>) {
+  getAuthToken = getter;
+}
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  if (!getAuthToken) return {};
+  const token = await getAuthToken();
+  if (!token) return {};
+  return { Authorization: `Bearer ${token}` };
+}
+
+async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const authHeaders = await getAuthHeaders();
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...options.headers,
+      ...authHeaders,
+    },
+  });
+}
+
 async function handleJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = await response.text();
@@ -11,19 +36,19 @@ async function handleJson<T>(response: Response): Promise<T> {
 }
 
 export async function fetchModels(): Promise<ModelInfo[]> {
-  const res = await fetch('/api/models');
+  const res = await authFetch('/api/models');
   const data = await handleJson<{ models: ModelInfo[] }>(res);
   return data.models;
 }
 
 export async function fetchThreads(): Promise<ThreadSummary[]> {
-  const res = await fetch('/api/threads');
+  const res = await authFetch('/api/threads');
   const data = await handleJson<{ threads: ThreadSummary[] }>(res);
   return data.threads;
 }
 
 export async function createThread(title?: string | null): Promise<ThreadSummary> {
-  const res = await fetch('/api/threads', {
+  const res = await authFetch('/api/threads', {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify({ title }),
@@ -32,7 +57,7 @@ export async function createThread(title?: string | null): Promise<ThreadSummary
 }
 
 export async function deleteThread(threadId: string): Promise<void> {
-  const res = await fetch(`/api/threads/${threadId}`, { method: 'DELETE' });
+  const res = await authFetch(`/api/threads/${threadId}`, { method: 'DELETE' });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || 'Delete failed');
@@ -40,18 +65,18 @@ export async function deleteThread(threadId: string): Promise<void> {
 }
 
 export async function fetchMessages(threadId: string): Promise<Message[]> {
-  const res = await fetch(`/api/threads/${threadId}/messages`);
+  const res = await authFetch(`/api/threads/${threadId}/messages`);
   const data = await handleJson<{ messages: Message[] }>(res);
   return data.messages;
 }
 
 export async function fetchSettings(): Promise<Settings> {
-  const res = await fetch('/api/settings');
+  const res = await authFetch('/api/settings');
   return handleJson<Settings>(res);
 }
 
 export async function updateSettings(systemPrompt: string | null): Promise<Settings> {
-  const res = await fetch('/api/settings', {
+  const res = await authFetch('/api/settings', {
     method: 'PUT',
     headers: JSON_HEADERS,
     body: JSON.stringify({ systemPrompt }),
@@ -60,12 +85,12 @@ export async function updateSettings(systemPrompt: string | null): Promise<Setti
 }
 
 export async function fetchMemory(): Promise<Memory> {
-  const res = await fetch('/api/memory');
+  const res = await authFetch('/api/memory');
   return handleJson<Memory>(res);
 }
 
 export async function updateMemory(content: string): Promise<Memory> {
-  const res = await fetch('/api/memory', {
+  const res = await authFetch('/api/memory', {
     method: 'PUT',
     headers: JSON_HEADERS,
     body: JSON.stringify({ content }),
@@ -74,7 +99,7 @@ export async function updateMemory(content: string): Promise<Memory> {
 }
 
 export async function triggerMemoryExtraction(): Promise<MemoryExtractionResult> {
-  const res = await fetch('/api/memory/extract', {
+  const res = await authFetch('/api/memory/extract', {
     method: 'POST',
     headers: JSON_HEADERS,
   });
@@ -88,8 +113,10 @@ export async function uploadFiles(threadId: string, files: FileList): Promise<Up
     formData.append('files', file);
   });
 
+  const authHeaders = await getAuthHeaders();
   const res = await fetch('/api/uploads', {
     method: 'POST',
+    headers: authHeaders,
     body: formData,
   });
 
@@ -131,9 +158,10 @@ export async function streamChat(
   callbacks: StreamCallbacks,
 ) {
   const { signal, ...body } = payload;
+  const authHeaders = await getAuthHeaders();
   const response = await fetch('/api/chat/stream', {
     method: 'POST',
-    headers: JSON_HEADERS,
+    headers: { ...JSON_HEADERS, ...authHeaders },
     body: JSON.stringify(body),
     signal,
   });

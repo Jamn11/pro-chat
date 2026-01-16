@@ -22,6 +22,7 @@ class MockOpenRouterClient extends OpenRouterClient {
 describe('ChatService', () => {
   it('streams and stores assistant message with cost', async () => {
     const repo = new InMemoryChatRepository();
+    const user = await repo.upsertUserFromClerk({ clerkId: 'test-clerk-id' });
     const model: ModelInfo = {
       id: 'x-ai/grok-4.1-fast',
       label: 'Grok 4.1 Fast',
@@ -31,13 +32,14 @@ describe('ChatService', () => {
       supportsThinkingLevels: false,
     };
     await repo.upsertModels([model]);
-    const thread = await repo.createThread({});
+    const thread = await repo.createThread({ userId: user.id });
 
     const chatService = new ChatService(repo, new MockOpenRouterClient(), '/tmp');
 
     let streamed = '';
     const result = await chatService.sendMessageStream(
       {
+        userId: user.id,
         threadId: thread.id,
         content: 'Hi',
         modelId: model.id,
@@ -54,6 +56,7 @@ describe('ChatService', () => {
 
   it('rejects attachments from another thread', async () => {
     const repo = new InMemoryChatRepository();
+    const user = await repo.upsertUserFromClerk({ clerkId: 'test-clerk-id-2' });
     const model: ModelInfo = {
       id: 'x-ai/grok-4.1-fast',
       label: 'Grok 4.1 Fast',
@@ -63,8 +66,8 @@ describe('ChatService', () => {
       supportsThinkingLevels: false,
     };
     await repo.upsertModels([model]);
-    const thread = await repo.createThread({});
-    const otherThread = await repo.createThread({});
+    const thread = await repo.createThread({ userId: user.id });
+    const otherThread = await repo.createThread({ userId: user.id });
     const attachment = await repo.createAttachment({
       threadId: otherThread.id,
       filename: 'file.txt',
@@ -79,6 +82,7 @@ describe('ChatService', () => {
     await expect(
       chatService.sendMessageStream(
         {
+          userId: user.id,
           threadId: thread.id,
           content: 'Hi',
           modelId: model.id,

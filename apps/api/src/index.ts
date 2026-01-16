@@ -87,7 +87,7 @@ const app = createApp({
 });
 
 async function bootstrap() {
-  await repository.ensureDefaultUser();
+  // Users are now created on-demand when they authenticate with Clerk
   await repository.upsertModels(MODEL_SEED);
   await memoryStore.ensureExists();
 

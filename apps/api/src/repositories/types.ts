@@ -13,7 +13,29 @@ export type SettingsRecord = {
   systemPrompt: string | null;
 };
 
+export type UserRecord = {
+  id: string;
+  clerkId: string;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  imageUrl: string | null;
+  systemPrompt: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  lastSignInAt: Date | null;
+};
+
+export type UpsertUserFromClerkInput = {
+  clerkId: string;
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+  imageUrl?: string;
+};
+
 export type CreateThreadInput = {
+  userId: string;
   title?: string | null;
 };
 
@@ -41,25 +63,38 @@ export type CreateAttachmentInput = {
 };
 
 export interface ChatRepository {
-  ensureDefaultUser(): Promise<string>;
-  getSettings(): Promise<SettingsRecord>;
-  updateSettings(systemPrompt: string | null): Promise<SettingsRecord>;
+  // User management (Clerk integration)
+  findUserByClerkId(clerkId: string): Promise<UserRecord | null>;
+  upsertUserFromClerk(input: UpsertUserFromClerkInput): Promise<UserRecord>;
+
+  // Settings (per-user)
+  getSettings(userId: string): Promise<SettingsRecord>;
+  updateSettings(userId: string, systemPrompt: string | null): Promise<SettingsRecord>;
+
+  // Models (shared across users)
   listModels(): Promise<ModelInfo[]>;
   upsertModels(models: ModelInfo[]): Promise<void>;
-  listThreads(): Promise<ThreadSummary[]>;
+
+  // Threads (per-user)
+  listThreads(userId: string): Promise<ThreadSummary[]>;
   createThread(input: CreateThreadInput): Promise<ThreadRecord>;
   updateThreadTitle(threadId: string, title: string): Promise<void>;
   deleteThread(threadId: string): Promise<void>;
   getThreadMessages(threadId: string): Promise<MessageRecord[]>;
+
+  // Messages
   createMessage(input: CreateMessageInput): Promise<MessageRecord>;
   updateMessage(id: string, data: Partial<CreateMessageInput>): Promise<MessageRecord>;
   pruneMessageArtifacts(before: Date): Promise<number>;
   incrementThreadCost(threadId: string, delta: number): Promise<number>;
+
+  // Attachments
   createAttachment(input: CreateAttachmentInput): Promise<AttachmentRecord>;
   attachAttachmentsToMessage(messageId: string, attachmentIds: string[]): Promise<void>;
   getAttachmentsByIds(ids: string[]): Promise<AttachmentRecord[]>;
   listAttachmentsForThread(threadId: string): Promise<AttachmentRecord[]>;
-  // Memory tracking methods
-  getThreadsForMemoryExtraction(): Promise<ThreadSummary[]>;
+
+  // Memory tracking methods (per-user)
+  getThreadsForMemoryExtraction(userId: string): Promise<ThreadSummary[]>;
   markThreadMemoryChecked(threadId: string): Promise<void>;
 }

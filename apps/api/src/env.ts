@@ -12,6 +12,9 @@ const envSchema = z.object({
   OPENROUTER_APP_URL: z.string().optional(),
   OPENROUTER_APP_NAME: z.string().optional(),
   DATABASE_URL: z.string().min(1),
+  // Clerk authentication
+  CLERK_PUBLISHABLE_KEY: z.string().min(1),
+  CLERK_SECRET_KEY: z.string().min(1),
   STORAGE_PATH: z.string().default('storage'),
   MEMORY_PATH: z.string().optional(),
   // Search tool
@@ -40,6 +43,8 @@ export const env = envSchema.parse({
   OPENROUTER_APP_URL: process.env.OPENROUTER_APP_URL,
   OPENROUTER_APP_NAME: process.env.OPENROUTER_APP_NAME,
   DATABASE_URL: process.env.DATABASE_URL,
+  CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY,
+  CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
   STORAGE_PATH: process.env.STORAGE_PATH,
   MEMORY_PATH: process.env.MEMORY_PATH,
   BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY,

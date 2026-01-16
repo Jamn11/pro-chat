@@ -14,6 +14,7 @@
     "prisma:studio": "DOTENV_CONFIG_PATH=../../.env node -r dotenv/config ../../node_modules/.bin/prisma studio"
   },
   "dependencies": {
+    "@clerk/express": "^1.7.62",
     "@prisma/client": "^5.12.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

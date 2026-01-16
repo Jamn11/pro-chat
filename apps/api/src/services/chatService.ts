@@ -23,6 +23,7 @@ import { SEARCH_TOOL_NAME, SearchTool, searchToolDefinition } from './searchTool
 import { WEB_FETCH_TOOL_NAME, WebFetchTool, webFetchToolDefinition } from './webFetchTool';
 
 export type SendMessageInput = {
+  userId: string;
   threadId: string;
   content: string;
   modelId: string;
@@ -146,7 +147,7 @@ ${firstMessage.slice(0, 500)}`;
       throw new Error('Model not found');
     }
 
-    const threads = await this.repo.listThreads();
+    const threads = await this.repo.listThreads(input.userId);
     const thread = threads.find((t) => t.id === input.threadId);
     if (!thread) {
       throw new Error('Thread not found');
@@ -170,7 +171,7 @@ ${firstMessage.slice(0, 500)}`;
       await this.repo.attachAttachmentsToMessage(userMessage.id, attachments.map((a) => a.id));
     }
 
-    const settings = await this.repo.getSettings();
+    const settings = await this.repo.getSettings(input.userId);
     const history = await this.repo.getThreadMessages(input.threadId);
     const systemPrompt = settings.systemPrompt?.trim();
     const memory = await this.options.memoryStore?.read();

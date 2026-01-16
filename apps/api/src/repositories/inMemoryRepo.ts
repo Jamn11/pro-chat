@@ -12,28 +12,72 @@ import {
   CreateMessageInput,
   CreateThreadInput,
   SettingsRecord,
+  UserRecord,
+  UpsertUserFromClerkInput,
 } from './types';
 
 type InternalThread = ThreadRecord & { memoryCheckedAt: Date | null };
 
+type InternalUser = UserRecord;
+
 export class InMemoryChatRepository implements ChatRepository {
-  private userId = randomUUID();
-  private systemPrompt: string | null = null;
+  private users = new Map<string, InternalUser>();
   private models = new Map<string, ModelInfo>();
   private threads = new Map<string, InternalThread>();
   private messages = new Map<string, MessageRecord>();
   private attachments = new Map<string, AttachmentRecord>();
 
-  async ensureDefaultUser(): Promise<string> {
-    return this.userId;
+  // User management (Clerk integration)
+  async findUserByClerkId(clerkId: string): Promise<UserRecord | null> {
+    for (const user of this.users.values()) {
+      if (user.clerkId === clerkId) return user;
+    }
+    return null;
   }
 
-  async getSettings(): Promise<SettingsRecord> {
-    return { systemPrompt: this.systemPrompt };
+  async upsertUserFromClerk(input: UpsertUserFromClerkInput): Promise<UserRecord> {
+    const existing = await this.findUserByClerkId(input.clerkId);
+    if (existing) {
+      const updated: InternalUser = {
+        ...existing,
+        email: input.email ?? existing.email,
+        firstName: input.firstName ?? existing.firstName,
+        lastName: input.lastName ?? existing.lastName,
+        imageUrl: input.imageUrl ?? existing.imageUrl,
+        updatedAt: new Date(),
+        lastSignInAt: new Date(),
+      };
+      this.users.set(updated.id, updated);
+      return updated;
+    }
+    const newUser: InternalUser = {
+      id: randomUUID(),
+      clerkId: input.clerkId,
+      email: input.email ?? null,
+      firstName: input.firstName ?? null,
+      lastName: input.lastName ?? null,
+      imageUrl: input.imageUrl ?? null,
+      systemPrompt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastSignInAt: new Date(),
+    };
+    this.users.set(newUser.id, newUser);
+    return newUser;
   }
 
-  async updateSettings(systemPrompt: string | null): Promise<SettingsRecord> {
-    this.systemPrompt = systemPrompt;
+  // Settings (per-user)
+  async getSettings(userId: string): Promise<SettingsRecord> {
+    const user = this.users.get(userId);
+    return { systemPrompt: user?.systemPrompt ?? null };
+  }
+
+  async updateSettings(userId: string, systemPrompt: string | null): Promise<SettingsRecord> {
+    const user = this.users.get(userId);
+    if (user) {
+      user.systemPrompt = systemPrompt;
+      this.users.set(userId, user);
+    }
     return { systemPrompt };
   }
 
@@ -47,7 +91,8 @@ export class InMemoryChatRepository implements ChatRepository {
     }
   }
 
-  async listThreads(): Promise<ThreadSummary[]> {
+  async listThreads(_userId: string): Promise<ThreadSummary[]> {
+    // In-memory repo doesn't filter by user for simplicity in tests
     return [...this.threads.values()].map((thread) => ({
       id: thread.id,
       title: thread.title,
@@ -200,7 +245,8 @@ export class InMemoryChatRepository implements ChatRepository {
     return [...this.attachments.values()].filter((a) => a.threadId === threadId);
   }
 
-  async getThreadsForMemoryExtraction(): Promise<ThreadSummary[]> {
+  async getThreadsForMemoryExtraction(_userId: string): Promise<ThreadSummary[]> {
+    // In-memory repo doesn't filter by user for simplicity in tests
     const allThreads = [...this.threads.values()];
     // Filter threads that need memory extraction:
     // - Have at least one message

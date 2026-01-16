@@ -9,6 +9,7 @@ import { ChatService } from './services/chatService';
 import { ChatRepository } from './repositories/types';
 import { MemoryStore } from './services/memoryStore';
 import { MemoryExtractor } from './services/memoryExtractor';
+import { clerkAuthMiddleware, requireAuthentication, syncUserMiddleware, getUserId } from './middleware/clerkAuth';
 
 const uploadSchema = z.object({
   threadId: z.string().min(1),
@@ -65,6 +66,9 @@ export function createApp({
   app.use(cors());
   app.use(express.json({ limit: '10mb' }));
 
+  // Clerk authentication middleware
+  app.use(clerkAuthMiddleware);
+
   const upload = multer({
     storage: multer.diskStorage({
       destination: async (_req, _file, cb) => {
@@ -77,9 +81,13 @@ export function createApp({
     }),
   });
 
+  // Public routes (no authentication required)
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
   });
+
+  // Protected routes - require authentication and sync user to database
+  app.use('/api', requireAuthentication, syncUserMiddleware(repo));
 
   app.get('/api/models', async (_req, res, next) => {
     try {
@@ -90,9 +98,10 @@ export function createApp({
     }
   });
 
-  app.get('/api/settings', async (_req, res, next) => {
+  app.get('/api/settings', async (req, res, next) => {
     try {
-      const settings = await repo.getSettings();
+      const userId = getUserId(req);
+      const settings = await repo.getSettings(userId);
       res.json(settings);
     } catch (error) {
       next(error);
@@ -101,8 +110,9 @@ export function createApp({
 
   app.put('/api/settings', async (req, res, next) => {
     try {
+      const userId = getUserId(req);
       const parsed = settingsSchema.parse(req.body);
-      const updated = await repo.updateSettings(parsed.systemPrompt ?? null);
+      const updated = await repo.updateSettings(userId, parsed.systemPrompt ?? null);
       res.json(updated);
     } catch (error) {
       next(error);
@@ -137,22 +147,24 @@ export function createApp({
     }
   });
 
-  app.post('/api/memory/extract', async (_req, res, next) => {
+  app.post('/api/memory/extract', async (req, res, next) => {
     try {
       if (!memoryExtractor) {
         res.status(503).json({ error: 'Memory extractor not configured' });
         return;
       }
-      const result = await memoryExtractor.extractFromUncheckedThreads();
+      const userId = getUserId(req);
+      const result = await memoryExtractor.extractFromUncheckedThreads(userId);
       res.json(result);
     } catch (error) {
       next(error);
     }
   });
 
-  app.get('/api/threads', async (_req, res, next) => {
+  app.get('/api/threads', async (req, res, next) => {
     try {
-      const threads = await repo.listThreads();
+      const userId = getUserId(req);
+      const threads = await repo.listThreads(userId);
       res.json({ threads });
     } catch (error) {
       next(error);
@@ -161,8 +173,9 @@ export function createApp({
 
   app.post('/api/threads', async (req, res, next) => {
     try {
+      const userId = getUserId(req);
       const parsed = createThreadSchema.parse(req.body ?? {});
-      const thread = await repo.createThread({ title: parsed.title ?? null });
+      const thread = await repo.createThread({ userId, title: parsed.title ?? null });
       res.status(201).json(thread);
     } catch (error) {
       next(error);
@@ -259,6 +272,7 @@ export function createApp({
   app.post('/api/chat/stream', async (req, res, next) => {
     let sendEvent: ((event: string, data: unknown) => void) | null = null;
     try {
+      const userId = getUserId(req);
       const parsed = streamSchema.parse(req.body);
 
       res.writeHead(200, {
@@ -289,6 +303,7 @@ export function createApp({
 
       const result = await chatService.sendMessageStream(
         {
+          userId,
           threadId: parsed.threadId,
           content: parsed.content,
           modelId: parsed.modelId,

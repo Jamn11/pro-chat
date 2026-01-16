@@ -14,11 +14,12 @@ import {
   CreateMessageInput,
   CreateThreadInput,
   SettingsRecord,
+  UserRecord,
+  UpsertUserFromClerkInput,
 } from './types';
 
 export class PrismaChatRepository implements ChatRepository {
   private prisma: PrismaClient;
-  private defaultUserId: string | null = null;
 
   constructor(prismaClient?: PrismaClient) {
     this.prisma = prismaClient ?? new PrismaClient();
@@ -28,26 +29,69 @@ export class PrismaChatRepository implements ChatRepository {
     return this.prisma;
   }
 
-  async ensureDefaultUser(): Promise<string> {
-    if (this.defaultUserId) return this.defaultUserId;
-    const existing = await this.prisma.user.findFirst();
-    if (existing) {
-      this.defaultUserId = existing.id;
-      return existing.id;
-    }
-    const created = await this.prisma.user.create({ data: {} });
-    this.defaultUserId = created.id;
-    return created.id;
+  // User management (Clerk integration)
+  async findUserByClerkId(clerkId: string): Promise<UserRecord | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { clerkId },
+    });
+    return user ? this.toUserRecord(user) : null;
   }
 
-  async getSettings(): Promise<SettingsRecord> {
-    const userId = await this.ensureDefaultUser();
+  async upsertUserFromClerk(input: UpsertUserFromClerkInput): Promise<UserRecord> {
+    const user = await this.prisma.user.upsert({
+      where: { clerkId: input.clerkId },
+      update: {
+        email: input.email,
+        firstName: input.firstName,
+        lastName: input.lastName,
+        imageUrl: input.imageUrl,
+        lastSignInAt: new Date(),
+      },
+      create: {
+        clerkId: input.clerkId,
+        email: input.email,
+        firstName: input.firstName,
+        lastName: input.lastName,
+        imageUrl: input.imageUrl,
+        lastSignInAt: new Date(),
+      },
+    });
+    return this.toUserRecord(user);
+  }
+
+  private toUserRecord(user: {
+    id: string;
+    clerkId: string;
+    email: string | null;
+    firstName: string | null;
+    lastName: string | null;
+    imageUrl: string | null;
+    systemPrompt: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    lastSignInAt: Date | null;
+  }): UserRecord {
+    return {
+      id: user.id,
+      clerkId: user.clerkId,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      imageUrl: user.imageUrl,
+      systemPrompt: user.systemPrompt,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+      lastSignInAt: user.lastSignInAt,
+    };
+  }
+
+  // Settings (per-user)
+  async getSettings(userId: string): Promise<SettingsRecord> {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     return { systemPrompt: user?.systemPrompt ?? null };
   }
 
-  async updateSettings(systemPrompt: string | null): Promise<SettingsRecord> {
-    const userId = await this.ensureDefaultUser();
+  async updateSettings(userId: string, systemPrompt: string | null): Promise<SettingsRecord> {
     const user = await this.prisma.user.update({
       where: { id: userId },
       data: { systemPrompt },
@@ -97,9 +141,9 @@ export class PrismaChatRepository implements ChatRepository {
     );
   }
 
-  async listThreads(): Promise<ThreadSummary[]> {
-    await this.ensureDefaultUser();
+  async listThreads(userId: string): Promise<ThreadSummary[]> {
     const threads = await this.prisma.chatThread.findMany({
+      where: { userId },
       orderBy: { updatedAt: 'desc' },
     });
     return threads.map((thread) => ({
@@ -112,9 +156,8 @@ export class PrismaChatRepository implements ChatRepository {
   }
 
   async createThread(input: CreateThreadInput): Promise<ThreadRecord> {
-    const userId = await this.ensureDefaultUser();
     const thread = await this.prisma.chatThread.create({
-      data: { title: input.title ?? null, userId },
+      data: { title: input.title ?? null, userId: input.userId },
     });
     return {
       id: thread.id,
@@ -323,13 +366,13 @@ export class PrismaChatRepository implements ChatRepository {
     }));
   }
 
-  async getThreadsForMemoryExtraction(): Promise<ThreadSummary[]> {
-    await this.ensureDefaultUser();
+  async getThreadsForMemoryExtraction(userId: string): Promise<ThreadSummary[]> {
     // Get threads that have messages and either:
     // - Haven't been memory-checked yet (memoryCheckedAt is null)
     // - Were updated after the last memory check
     const threads = await this.prisma.chatThread.findMany({
       where: {
+        userId,
         messages: {
           some: {},
         },
