@@ -588,11 +588,8 @@ export default function App() {
             setThreads((prev) =>
               prev.map((thread) => {
                 if (thread.id !== threadId) return thread;
-                const trimmed = data.userMessage.content?.trim() || '';
-                const nextTitle = thread.title || (trimmed ? trimmed.slice(0, 60) : null);
                 return {
                   ...thread,
-                  title: nextTitle,
                   totalCost: data.totalCost,
                   updatedAt: new Date().toISOString(),
                 };
@@ -604,6 +601,12 @@ export default function App() {
             fetchMemory()
               .then((memory) => setMemoryContent(memory.content ?? ''))
               .catch(() => {});
+            // Re-fetch threads after a delay to get LLM-generated title
+            setTimeout(() => {
+              fetchThreads()
+                .then((threadList) => setThreads(threadList))
+                .catch(() => {});
+            }, 1500);
           },
           onError: (message) => {
             setMessages((prev) =>
