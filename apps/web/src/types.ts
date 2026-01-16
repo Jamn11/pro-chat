@@ -54,7 +54,7 @@ export type UsageStats = {
   totalThreads: number;
   costByModel: Record<string, number>;
   messagesByModel: Record<string, number>;
-  dailyCosts: Array<{ date: string; cost: number }>;
+  dailyStats: Array<{ date: string; cost: number; messages: number }>;
 };
 
 export type Memory = {

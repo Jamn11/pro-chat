@@ -86,7 +86,7 @@ export class PrismaChatRepository implements ChatRepository {
   async getUsageStats(): Promise<UsageStats> {
     const costByModel: Record<string, number> = {};
     const messagesByModel: Record<string, number> = {};
-    const costsByDate = new Map<string, number>();
+    const statsByDate = new Map<string, { cost: number; messages: number }>();
     let totalCost = 0;
 
     // Use usage records for stats (persists even when chats are deleted)
@@ -95,7 +95,11 @@ export class PrismaChatRepository implements ChatRepository {
       costByModel[record.modelId] = (costByModel[record.modelId] || 0) + record.cost;
       messagesByModel[record.modelId] = (messagesByModel[record.modelId] || 0) + 1;
       const date = record.createdAt.toISOString().split('T')[0];
-      costsByDate.set(date, (costsByDate.get(date) || 0) + record.cost);
+      const existing = statsByDate.get(date) || { cost: 0, messages: 0 };
+      statsByDate.set(date, {
+        cost: existing.cost + record.cost,
+        messages: existing.messages + 1,
+      });
     }
 
     // Also include historical data from existing messages (for backward compatibility)
@@ -109,13 +113,15 @@ export class PrismaChatRepository implements ChatRepository {
 
     for (const message of messages) {
       if (message.modelId && message.cost) {
-        // Only count if not already tracked in usage records
-        // This avoids double counting for new messages
         totalCost += message.cost;
         costByModel[message.modelId] = (costByModel[message.modelId] || 0) + message.cost;
         messagesByModel[message.modelId] = (messagesByModel[message.modelId] || 0) + 1;
         const date = message.createdAt.toISOString().split('T')[0];
-        costsByDate.set(date, (costsByDate.get(date) || 0) + message.cost);
+        const existing = statsByDate.get(date) || { cost: 0, messages: 0 };
+        statsByDate.set(date, {
+          cost: existing.cost + message.cost,
+          messages: existing.messages + 1,
+        });
       }
     }
 
@@ -123,11 +129,11 @@ export class PrismaChatRepository implements ChatRepository {
       select: { id: true },
     });
 
-    const dailyCosts: Array<{ date: string; cost: number }> = [];
-    for (const [date, cost] of costsByDate) {
-      dailyCosts.push({ date, cost });
+    const dailyStats: Array<{ date: string; cost: number; messages: number }> = [];
+    for (const [date, stats] of statsByDate) {
+      dailyStats.push({ date, ...stats });
     }
-    dailyCosts.sort((a, b) => a.date.localeCompare(b.date));
+    dailyStats.sort((a, b) => a.date.localeCompare(b.date));
 
     return {
       totalCost,
@@ -135,7 +141,7 @@ export class PrismaChatRepository implements ChatRepository {
       totalThreads: threads.length,
       costByModel,
       messagesByModel,
-      dailyCosts,
+      dailyStats,
     };
   }
 

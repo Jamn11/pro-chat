@@ -1328,6 +1328,151 @@ export default function App() {
                     )}
                   </div>
 
+                  {/* Daily Activity Chart */}
+                  {usageStats && usageStats.dailyStats.length > 0 && (
+                    <div className="settings-card">
+                      <h3>Daily Activity</h3>
+                      <div className="usage-chart">
+                        <div className="usage-chart-legend">
+                          <span className="usage-legend-item messages">
+                            <span className="usage-legend-dot"></span>
+                            Messages
+                          </span>
+                          <span className="usage-legend-item cost">
+                            <span className="usage-legend-dot"></span>
+                            Cost
+                          </span>
+                        </div>
+                        <svg
+                          className="usage-chart-svg"
+                          viewBox="0 0 600 220"
+                          preserveAspectRatio="xMidYMid meet"
+                        >
+                          {(() => {
+                            const data = usageStats.dailyStats.slice(-14); // Last 14 days
+                            const maxMessages = Math.max(...data.map(d => d.messages), 1);
+                            const maxCost = Math.max(...data.map(d => d.cost), 0.01);
+                            const chartWidth = 540;
+                            const chartHeight = 160;
+                            const offsetX = 40;
+                            const offsetY = 10;
+
+                            // Calculate points for lines
+                            const messagePoints = data.map((day, i) => {
+                              const x = offsetX + (i / Math.max(data.length - 1, 1)) * chartWidth;
+                              const y = offsetY + chartHeight - (day.messages / maxMessages) * chartHeight;
+                              return { x, y, ...day };
+                            });
+
+                            const costPoints = data.map((day, i) => {
+                              const x = offsetX + (i / Math.max(data.length - 1, 1)) * chartWidth;
+                              const y = offsetY + chartHeight - (day.cost / maxCost) * chartHeight;
+                              return { x, y, ...day };
+                            });
+
+                            const messagePath = messagePoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+                            const costPath = costPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+
+                            return (
+                              <>
+                                {/* Grid lines */}
+                                {[0, 0.25, 0.5, 0.75, 1].map((ratio) => (
+                                  <line
+                                    key={ratio}
+                                    x1={offsetX}
+                                    y1={offsetY + chartHeight * (1 - ratio)}
+                                    x2={offsetX + chartWidth}
+                                    y2={offsetY + chartHeight * (1 - ratio)}
+                                    stroke="var(--border)"
+                                    strokeWidth="1"
+                                    strokeDasharray={ratio === 0 ? '' : '4,4'}
+                                    opacity={0.4}
+                                  />
+                                ))}
+
+                                {/* Messages line */}
+                                <path
+                                  d={messagePath}
+                                  fill="none"
+                                  stroke="var(--accent)"
+                                  strokeWidth="2.5"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+
+                                {/* Cost line */}
+                                <path
+                                  d={costPath}
+                                  fill="none"
+                                  stroke="var(--warning, #f59e0b)"
+                                  strokeWidth="2.5"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+
+                                {/* Message points */}
+                                {messagePoints.map((p) => (
+                                  <circle
+                                    key={`msg-${p.date}`}
+                                    cx={p.x}
+                                    cy={p.y}
+                                    r="5"
+                                    fill="var(--accent)"
+                                    stroke="var(--panel)"
+                                    strokeWidth="2"
+                                  />
+                                ))}
+
+                                {/* Cost points */}
+                                {costPoints.map((p) => (
+                                  <circle
+                                    key={`cost-${p.date}`}
+                                    cx={p.x}
+                                    cy={p.y}
+                                    r="5"
+                                    fill="var(--warning, #f59e0b)"
+                                    stroke="var(--panel)"
+                                    strokeWidth="2"
+                                  />
+                                ))}
+
+                                {/* X-axis labels */}
+                                {data.map((day, i) => {
+                                  const x = offsetX + (i / Math.max(data.length - 1, 1)) * chartWidth;
+                                  const dateLabel = new Date(day.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+                                  return (
+                                    <text
+                                      key={day.date}
+                                      x={x}
+                                      y={offsetY + chartHeight + 20}
+                                      textAnchor="middle"
+                                      fill="var(--muted)"
+                                      fontSize="10"
+                                    >
+                                      {dateLabel}
+                                    </text>
+                                  );
+                                })}
+                              </>
+                            );
+                          })()}
+                        </svg>
+                        <div className="usage-chart-summary">
+                          {usageStats.dailyStats.slice(-7).map((day) => (
+                            <div key={day.date} className="usage-chart-day">
+                              <span className="usage-chart-day-date">
+                                {new Date(day.date).toLocaleDateString('en-US', { weekday: 'short' })}
+                              </span>
+                              <span className="usage-chart-day-messages">{day.messages} msgs</span>
+                              <span className="usage-chart-day-cost">{formatCost(day.cost)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Cost by Model */}
                   <div className="settings-card">
                     <h3>Cost by Model</h3>
