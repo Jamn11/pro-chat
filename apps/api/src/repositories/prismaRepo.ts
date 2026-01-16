@@ -14,11 +14,23 @@ import {
   CreateMessageInput,
   CreateThreadInput,
   SettingsRecord,
+  UsageStats,
 } from './types';
 
 export class PrismaChatRepository implements ChatRepository {
   private prisma: PrismaClient;
   private defaultUserId: string | null = null;
+  // Store additional settings in memory (systemPrompt goes to DB)
+  private additionalSettings: Omit<SettingsRecord, 'systemPrompt'> = {
+    defaultModelId: null,
+    defaultThinkingLevel: null,
+    enabledModelIds: [],
+    enabledTools: ['web_search', 'code_interpreter', 'memory'],
+    hideCostPerMessage: false,
+    notifications: true,
+    fontFamily: 'Space Mono',
+    fontSize: 'medium',
+  };
 
   constructor(prismaClient?: PrismaClient) {
     this.prisma = prismaClient ?? new PrismaClient();
@@ -43,16 +55,74 @@ export class PrismaChatRepository implements ChatRepository {
   async getSettings(): Promise<SettingsRecord> {
     const userId = await this.ensureDefaultUser();
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    return { systemPrompt: user?.systemPrompt ?? null };
+    return {
+      systemPrompt: user?.systemPrompt ?? null,
+      ...this.additionalSettings,
+    };
   }
 
-  async updateSettings(systemPrompt: string | null): Promise<SettingsRecord> {
+  async updateSettings(settings: Partial<SettingsRecord>): Promise<SettingsRecord> {
     const userId = await this.ensureDefaultUser();
-    const user = await this.prisma.user.update({
-      where: { id: userId },
-      data: { systemPrompt },
+
+    // Update systemPrompt in DB if provided
+    if (settings.systemPrompt !== undefined) {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { systemPrompt: settings.systemPrompt },
+      });
+    }
+
+    // Update additional settings in memory
+    const { systemPrompt, ...rest } = settings;
+    this.additionalSettings = { ...this.additionalSettings, ...rest };
+
+    return this.getSettings();
+  }
+
+  async getUsageStats(): Promise<UsageStats> {
+    const messages = await this.prisma.message.findMany({
+      select: {
+        modelId: true,
+        cost: true,
+        createdAt: true,
+      },
     });
-    return { systemPrompt: user.systemPrompt ?? null };
+
+    const threads = await this.prisma.chatThread.findMany({
+      select: {
+        totalCost: true,
+      },
+    });
+
+    const costByModel: Record<string, number> = {};
+    const messagesByModel: Record<string, number> = {};
+    const costsByDate = new Map<string, number>();
+
+    for (const message of messages) {
+      if (message.modelId && message.cost) {
+        costByModel[message.modelId] = (costByModel[message.modelId] || 0) + message.cost;
+        messagesByModel[message.modelId] = (messagesByModel[message.modelId] || 0) + 1;
+      }
+      if (message.cost) {
+        const date = message.createdAt.toISOString().split('T')[0];
+        costsByDate.set(date, (costsByDate.get(date) || 0) + message.cost);
+      }
+    }
+
+    const dailyCosts: Array<{ date: string; cost: number }> = [];
+    for (const [date, cost] of costsByDate) {
+      dailyCosts.push({ date, cost });
+    }
+    dailyCosts.sort((a, b) => a.date.localeCompare(b.date));
+
+    return {
+      totalCost: threads.reduce((sum, t) => sum + t.totalCost, 0),
+      totalMessages: messages.length,
+      totalThreads: threads.length,
+      costByModel,
+      messagesByModel,
+      dailyCosts,
+    };
   }
 
   async listModels(): Promise<ModelInfo[]> {

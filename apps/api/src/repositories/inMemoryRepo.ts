@@ -12,13 +12,24 @@ import {
   CreateMessageInput,
   CreateThreadInput,
   SettingsRecord,
+  UsageStats,
 } from './types';
 
 type InternalThread = ThreadRecord & { memoryCheckedAt: Date | null };
 
 export class InMemoryChatRepository implements ChatRepository {
   private userId = randomUUID();
-  private systemPrompt: string | null = null;
+  private settings: SettingsRecord = {
+    systemPrompt: null,
+    defaultModelId: null,
+    defaultThinkingLevel: null,
+    enabledModelIds: [],
+    enabledTools: ['web_search', 'code_interpreter', 'memory'],
+    hideCostPerMessage: false,
+    notifications: true,
+    fontFamily: 'Space Mono',
+    fontSize: 'medium',
+  };
   private models = new Map<string, ModelInfo>();
   private threads = new Map<string, InternalThread>();
   private messages = new Map<string, MessageRecord>();
@@ -29,12 +40,49 @@ export class InMemoryChatRepository implements ChatRepository {
   }
 
   async getSettings(): Promise<SettingsRecord> {
-    return { systemPrompt: this.systemPrompt };
+    return { ...this.settings };
   }
 
-  async updateSettings(systemPrompt: string | null): Promise<SettingsRecord> {
-    this.systemPrompt = systemPrompt;
-    return { systemPrompt };
+  async updateSettings(newSettings: Partial<SettingsRecord>): Promise<SettingsRecord> {
+    this.settings = { ...this.settings, ...newSettings };
+    return { ...this.settings };
+  }
+
+  async getUsageStats(): Promise<UsageStats> {
+    const allMessages = [...this.messages.values()];
+    const allThreads = [...this.threads.values()];
+
+    const costByModel: Record<string, number> = {};
+    const messagesByModel: Record<string, number> = {};
+
+    for (const message of allMessages) {
+      if (message.modelId && message.cost) {
+        costByModel[message.modelId] = (costByModel[message.modelId] || 0) + message.cost;
+        messagesByModel[message.modelId] = (messagesByModel[message.modelId] || 0) + 1;
+      }
+    }
+
+    const dailyCosts: Array<{ date: string; cost: number }> = [];
+    const costsByDate = new Map<string, number>();
+    for (const message of allMessages) {
+      if (message.cost) {
+        const date = message.createdAt.toISOString().split('T')[0];
+        costsByDate.set(date, (costsByDate.get(date) || 0) + message.cost);
+      }
+    }
+    for (const [date, cost] of costsByDate) {
+      dailyCosts.push({ date, cost });
+    }
+    dailyCosts.sort((a, b) => a.date.localeCompare(b.date));
+
+    return {
+      totalCost: allThreads.reduce((sum, t) => sum + t.totalCost, 0),
+      totalMessages: allMessages.length,
+      totalThreads: allThreads.length,
+      costByModel,
+      messagesByModel,
+      dailyCosts,
+    };
   }
 
   async listModels(): Promise<ModelInfo[]> {

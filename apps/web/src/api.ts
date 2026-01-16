@@ -1,4 +1,4 @@
-import type { Memory, MemoryExtractionResult, Message, ModelInfo, Settings, ThreadSummary, UploadAttachment } from './types';
+import type { Memory, MemoryExtractionResult, Message, ModelInfo, Settings, ThreadSummary, UploadAttachment, UsageStats } from './types';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
@@ -50,13 +50,18 @@ export async function fetchSettings(): Promise<Settings> {
   return handleJson<Settings>(res);
 }
 
-export async function updateSettings(systemPrompt: string | null): Promise<Settings> {
+export async function updateSettings(settings: Partial<Settings>): Promise<Settings> {
   const res = await fetch('/api/settings', {
     method: 'PUT',
     headers: JSON_HEADERS,
-    body: JSON.stringify({ systemPrompt }),
+    body: JSON.stringify(settings),
   });
   return handleJson<Settings>(res);
+}
+
+export async function fetchUsageStats(): Promise<UsageStats> {
+  const res = await fetch('/api/usage');
+  return handleJson<UsageStats>(res);
 }
 
 export async function fetchMemory(): Promise<Memory> {

@@ -38,6 +38,23 @@ export type Message = {
 
 export type Settings = {
   systemPrompt: string | null;
+  defaultModelId: string | null;
+  defaultThinkingLevel: string | null;
+  enabledModelIds: string[];
+  enabledTools: string[];
+  hideCostPerMessage: boolean;
+  notifications: boolean;
+  fontFamily: string;
+  fontSize: string;
+};
+
+export type UsageStats = {
+  totalCost: number;
+  totalMessages: number;
+  totalThreads: number;
+  costByModel: Record<string, number>;
+  messagesByModel: Record<string, number>;
+  dailyCosts: Array<{ date: string; cost: number }>;
 };
 
 export type Memory = {

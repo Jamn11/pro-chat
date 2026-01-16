@@ -20,6 +20,14 @@ const createThreadSchema = z.object({
 
 const settingsSchema = z.object({
   systemPrompt: z.string().optional().nullable(),
+  defaultModelId: z.string().optional().nullable(),
+  defaultThinkingLevel: z.string().optional().nullable(),
+  enabledModelIds: z.array(z.string()).optional(),
+  enabledTools: z.array(z.string()).optional(),
+  hideCostPerMessage: z.boolean().optional(),
+  notifications: z.boolean().optional(),
+  fontFamily: z.string().optional(),
+  fontSize: z.string().optional(),
 });
 
 const memorySchema = z.object({
@@ -102,8 +110,17 @@ export function createApp({
   app.put('/api/settings', async (req, res, next) => {
     try {
       const parsed = settingsSchema.parse(req.body);
-      const updated = await repo.updateSettings(parsed.systemPrompt ?? null);
+      const updated = await repo.updateSettings(parsed);
       res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/usage', async (_req, res, next) => {
+    try {
+      const stats = await repo.getUsageStats();
+      res.json(stats);
     } catch (error) {
       next(error);
     }

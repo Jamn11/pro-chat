@@ -9,17 +9,19 @@ import {
   fetchModels,
   fetchSettings,
   fetchThreads,
+  fetchUsageStats,
   streamChat,
   triggerMemoryExtraction,
   updateMemory,
   updateSettings,
   uploadFiles,
 } from './api';
-import type { Attachment, ModelInfo, ThreadSummary, UIMessage } from './types';
+import type { Attachment, ModelInfo, Settings, ThreadSummary, UIMessage, UsageStats } from './types';
 import './App.css';
 
 type Theme = 'light' | 'dark';
 type ViewMode = 'chat' | 'settings';
+type SettingsTab = 'personalization' | 'instructions' | 'usage';
 type ThinkingLevel = 'low' | 'medium' | 'high';
 type ThinkingSelection = ThinkingLevel | null;
 
@@ -129,6 +131,19 @@ export default function App() {
   const [memoryContent, setMemoryContent] = useState('');
   const [isExtractingMemory, setIsExtractingMemory] = useState(false);
   const [activeView, setActiveView] = useState<ViewMode>('chat');
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('personalization');
+  const [settings, setSettings] = useState<Settings>({
+    systemPrompt: null,
+    defaultModelId: null,
+    defaultThinkingLevel: null,
+    enabledModelIds: [],
+    enabledTools: ['web_search', 'code_interpreter', 'memory'],
+    hideCostPerMessage: false,
+    notifications: true,
+    fontFamily: 'Space Mono',
+    fontSize: 'medium',
+  });
+  const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
   const [theme, setTheme] = useState<Theme>(() => {
     if (typeof window === 'undefined') return 'dark';
     const storage = window.localStorage;
@@ -212,19 +227,48 @@ export default function App() {
 
   useEffect(() => {
     async function load() {
-      const [modelList, threadList, settings, memory] = await Promise.all([
+      const [modelList, threadList, fetchedSettings, memory, usage] = await Promise.all([
         fetchModels(),
         fetchThreads(),
         fetchSettings(),
         fetchMemory().catch(() => ({ content: '' })),
+        fetchUsageStats().catch(() => null),
       ]);
       setModels(modelList);
       setThreads(threadList);
-      if (modelList.length > 0) {
-        setSelectedModelId(modelList[0].id);
-      }
-      setSystemPrompt(settings.systemPrompt ?? '');
+
+      // Initialize settings with defaults for any missing fields
+      const normalizedSettings: Settings = {
+        systemPrompt: fetchedSettings.systemPrompt ?? null,
+        defaultModelId: fetchedSettings.defaultModelId ?? null,
+        defaultThinkingLevel: fetchedSettings.defaultThinkingLevel ?? null,
+        enabledModelIds: fetchedSettings.enabledModelIds ?? modelList.map(m => m.id),
+        enabledTools: fetchedSettings.enabledTools ?? ['web_search', 'code_interpreter', 'memory'],
+        hideCostPerMessage: fetchedSettings.hideCostPerMessage ?? false,
+        notifications: fetchedSettings.notifications ?? true,
+        fontFamily: fetchedSettings.fontFamily ?? 'Space Mono',
+        fontSize: fetchedSettings.fontSize ?? 'medium',
+      };
+      setSettings(normalizedSettings);
+      setSystemPrompt(normalizedSettings.systemPrompt ?? '');
       setMemoryContent(memory.content ?? '');
+      if (usage) setUsageStats(usage);
+
+      // Use default model from settings if available, otherwise first model
+      if (modelList.length > 0) {
+        const defaultId = normalizedSettings.defaultModelId;
+        if (defaultId && modelList.some(m => m.id === defaultId)) {
+          setSelectedModelId(defaultId);
+        } else {
+          setSelectedModelId(modelList[0].id);
+        }
+      }
+
+      // Use default thinking level from settings if available
+      if (normalizedSettings.defaultThinkingLevel) {
+        setThinkingLevel(normalizedSettings.defaultThinkingLevel as ThinkingLevel);
+      }
+
       if (threadList.length > 0) {
         setActiveThreadId(threadList[0].id);
       }
@@ -533,9 +577,17 @@ export default function App() {
     }
   };
 
-  const handleSettingsSave = async () => {
-    const updated = await updateSettings(systemPrompt);
-    setSystemPrompt(updated.systemPrompt ?? '');
+  const handleSettingsSave = async (newSettings?: Partial<Settings>) => {
+    try {
+      const toSave = newSettings ?? { systemPrompt };
+      const updated = await updateSettings(toSave);
+      setSettings(prev => ({ ...prev, ...updated }));
+      if (updated.systemPrompt !== undefined) {
+        setSystemPrompt(updated.systemPrompt ?? '');
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save settings');
+    }
   };
 
   const handleMemorySave = async () => {
@@ -617,7 +669,9 @@ export default function App() {
                 }}
               >
                 <span className="thread-title">{thread.title ?? 'Untitled chat'}</span>
-                <span className="thread-cost">{formatCost(thread.totalCost)}</span>
+                {!settings.hideCostPerMessage && (
+                  <span className="thread-cost">{formatCost(thread.totalCost)}</span>
+                )}
               </button>
               <button
                 className="thread-delete"
@@ -715,7 +769,7 @@ export default function App() {
                     </div>
                   )}
                   <div className="message-meta">
-                    {message.cost != null && message.role === 'assistant' && (
+                    {message.cost != null && message.role === 'assistant' && !settings.hideCostPerMessage && (
                       <span>{formatCost(message.cost)}</span>
                     )}
                     {message.role === 'assistant' && formatDuration(message.durationMs) && (
@@ -844,69 +898,404 @@ export default function App() {
             <div className="settings-header">
               <div>
                 <h2>Settings</h2>
-                <p>Customize your experience and system prompt.</p>
+                <p>Customize your experience, models, and preferences.</p>
               </div>
               <button className="button ghost" onClick={() => setActiveView('chat')}>
                 Back to Chat
               </button>
             </div>
-            <div className="settings-card">
-              <div className="settings-row">
-                <div>
-                  <h3>Theme</h3>
-                  <p>Toggle light or dark mode.</p>
-                </div>
-                <button
-                  className="button primary"
-                  onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-                >
-                  {theme === 'dark' ? 'Switch to Light' : 'Switch to Dark'}
-                </button>
-              </div>
+
+            <div className="settings-tabs">
+              <button
+                className={`settings-tab ${settingsTab === 'personalization' ? 'active' : ''}`}
+                onClick={() => setSettingsTab('personalization')}
+              >
+                Personalization
+              </button>
+              <button
+                className={`settings-tab ${settingsTab === 'instructions' ? 'active' : ''}`}
+                onClick={() => setSettingsTab('instructions')}
+              >
+                Model Instructions
+              </button>
+              <button
+                className={`settings-tab ${settingsTab === 'usage' ? 'active' : ''}`}
+                onClick={() => setSettingsTab('usage')}
+              >
+                Usage
+              </button>
             </div>
-            <div className="settings-card">
-              <div className="settings-row">
-                <div>
-                  <h3>System Prompt</h3>
-                  <p>Applies to every message in the current session.</p>
-                </div>
-              </div>
-              <textarea
-                value={systemPrompt}
-                onChange={(event) => setSystemPrompt(event.target.value)}
-                rows={6}
-              />
-              <div className="settings-actions">
-                <button className="button primary" onClick={handleSettingsSave}>
-                  Save Prompt
-                </button>
-              </div>
-            </div>
-            <div className="settings-card">
-              <div className="settings-row">
-                <div>
-                  <h3>Memory</h3>
-                  <p>Facts and preferences about you that the AI remembers across conversations.</p>
-                </div>
-                <button
-                  className="button primary"
-                  onClick={handleMemoryExtraction}
-                  disabled={isExtractingMemory}
-                >
-                  {isExtractingMemory ? 'Extracting...' : 'Update Memory'}
-                </button>
-              </div>
-              <textarea
-                value={memoryContent}
-                onChange={(event) => setMemoryContent(event.target.value)}
-                rows={8}
-                placeholder="Memory is empty. Chat with the AI or click 'Update Memory' to extract memories from your conversations."
-              />
-              <div className="settings-actions">
-                <button className="button primary" onClick={handleMemorySave}>
-                  Save Memory
-                </button>
-              </div>
+
+            <div className="settings-content">
+              {settingsTab === 'personalization' && (
+                <>
+                  {/* Theme */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Theme</h3>
+                        <p>Toggle light or dark mode.</p>
+                      </div>
+                      <button
+                        className="button primary"
+                        onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                      >
+                        {theme === 'dark' ? 'Switch to Light' : 'Switch to Dark'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Font Settings */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Font</h3>
+                        <p>Customize the chat font family and size.</p>
+                      </div>
+                    </div>
+                    <div className="settings-grid">
+                      <div className="settings-field">
+                        <label>Font Family</label>
+                        <select
+                          value={settings.fontFamily}
+                          onChange={(e) => {
+                            const newSettings = { ...settings, fontFamily: e.target.value };
+                            setSettings(newSettings);
+                            handleSettingsSave({ fontFamily: e.target.value });
+                          }}
+                        >
+                          <option value="Space Mono">Space Mono</option>
+                          <option value="Inter">Inter</option>
+                          <option value="SF Pro">SF Pro</option>
+                          <option value="Fira Code">Fira Code</option>
+                          <option value="JetBrains Mono">JetBrains Mono</option>
+                          <option value="system-ui">System Default</option>
+                        </select>
+                      </div>
+                      <div className="settings-field">
+                        <label>Font Size</label>
+                        <select
+                          value={settings.fontSize}
+                          onChange={(e) => {
+                            const newSettings = { ...settings, fontSize: e.target.value };
+                            setSettings(newSettings);
+                            handleSettingsSave({ fontSize: e.target.value });
+                          }}
+                        >
+                          <option value="small">Small</option>
+                          <option value="medium">Medium</option>
+                          <option value="large">Large</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Hide Cost Per Message */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Hide Cost Per Message</h3>
+                        <p>Hide individual message costs in the chat view.</p>
+                      </div>
+                      <button
+                        className={`toggle-button ${settings.hideCostPerMessage ? 'active' : ''}`}
+                        onClick={() => {
+                          const newVal = !settings.hideCostPerMessage;
+                          setSettings({ ...settings, hideCostPerMessage: newVal });
+                          handleSettingsSave({ hideCostPerMessage: newVal });
+                        }}
+                      >
+                        {settings.hideCostPerMessage ? 'On' : 'Off'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Notifications */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Notifications</h3>
+                        <p>Enable browser notifications for completed responses.</p>
+                      </div>
+                      <button
+                        className={`toggle-button ${settings.notifications ? 'active' : ''}`}
+                        onClick={() => {
+                          const newVal = !settings.notifications;
+                          setSettings({ ...settings, notifications: newVal });
+                          handleSettingsSave({ notifications: newVal });
+                        }}
+                      >
+                        {settings.notifications ? 'On' : 'Off'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Default Model */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Default Model</h3>
+                        <p>Model to use when starting a new chat.</p>
+                      </div>
+                    </div>
+                    <select
+                      className="settings-select"
+                      value={settings.defaultModelId ?? ''}
+                      onChange={(e) => {
+                        const newVal = e.target.value || null;
+                        setSettings({ ...settings, defaultModelId: newVal });
+                        handleSettingsSave({ defaultModelId: newVal });
+                      }}
+                    >
+                      <option value="">Use first available</option>
+                      {models.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Default Thinking Level */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Default Thinking Level</h3>
+                        <p>Thinking level to use when starting a new chat.</p>
+                      </div>
+                    </div>
+                    <select
+                      className="settings-select"
+                      value={settings.defaultThinkingLevel ?? ''}
+                      onChange={(e) => {
+                        const newVal = e.target.value || null;
+                        setSettings({ ...settings, defaultThinkingLevel: newVal });
+                        handleSettingsSave({ defaultThinkingLevel: newVal });
+                      }}
+                    >
+                      <option value="">Off</option>
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                    </select>
+                  </div>
+
+                  {/* Model Selector */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Available Models</h3>
+                        <p>Choose which models to show in the selector.</p>
+                      </div>
+                      <button
+                        className="button ghost"
+                        onClick={() => {
+                          const allIds = models.map(m => m.id);
+                          setSettings({ ...settings, enabledModelIds: allIds });
+                          handleSettingsSave({ enabledModelIds: allIds });
+                        }}
+                      >
+                        Enable All
+                      </button>
+                    </div>
+                    <div className="settings-model-list">
+                      {models.map((model) => {
+                        const isEnabled = settings.enabledModelIds.length === 0 || settings.enabledModelIds.includes(model.id);
+                        return (
+                          <label key={model.id} className="settings-checkbox">
+                            <input
+                              type="checkbox"
+                              checked={isEnabled}
+                              onChange={(e) => {
+                                let newIds: string[];
+                                if (settings.enabledModelIds.length === 0) {
+                                  newIds = models.filter(m => m.id !== model.id).map(m => m.id);
+                                } else if (e.target.checked) {
+                                  newIds = [...settings.enabledModelIds, model.id];
+                                } else {
+                                  newIds = settings.enabledModelIds.filter(id => id !== model.id);
+                                }
+                                setSettings({ ...settings, enabledModelIds: newIds });
+                                handleSettingsSave({ enabledModelIds: newIds });
+                              }}
+                            />
+                            <span className="checkbox-label">{model.label}</span>
+                            <span className="checkbox-id">{model.id}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Tool Permissions */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Tool Permissions</h3>
+                        <p>Choose which tools the AI can use.</p>
+                      </div>
+                    </div>
+                    <div className="settings-tool-list">
+                      {[
+                        { id: 'web_search', label: 'Web Search', description: 'Search the web for information' },
+                        { id: 'code_interpreter', label: 'Code Interpreter', description: 'Execute code and analyze data' },
+                        { id: 'memory', label: 'Memory', description: 'Remember facts across conversations' },
+                      ].map((tool) => {
+                        const isEnabled = settings.enabledTools.includes(tool.id);
+                        return (
+                          <label key={tool.id} className="settings-checkbox tool">
+                            <input
+                              type="checkbox"
+                              checked={isEnabled}
+                              onChange={(e) => {
+                                const newTools = e.target.checked
+                                  ? [...settings.enabledTools, tool.id]
+                                  : settings.enabledTools.filter(t => t !== tool.id);
+                                setSettings({ ...settings, enabledTools: newTools });
+                                handleSettingsSave({ enabledTools: newTools });
+                              }}
+                            />
+                            <div className="checkbox-content">
+                              <span className="checkbox-label">{tool.label}</span>
+                              <span className="checkbox-description">{tool.description}</span>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {settingsTab === 'instructions' && (
+                <>
+                  {/* System Prompt */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>System Prompt</h3>
+                        <p>Custom instructions that apply to every message.</p>
+                      </div>
+                    </div>
+                    <textarea
+                      value={systemPrompt}
+                      onChange={(event) => setSystemPrompt(event.target.value)}
+                      rows={8}
+                      placeholder="Enter custom instructions for the AI..."
+                    />
+                    <div className="settings-actions">
+                      <button className="button primary" onClick={() => handleSettingsSave({ systemPrompt })}>
+                        Save Prompt
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Memory */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Memory</h3>
+                        <p>Facts and preferences the AI remembers across conversations.</p>
+                      </div>
+                      <button
+                        className="button primary"
+                        onClick={handleMemoryExtraction}
+                        disabled={isExtractingMemory}
+                      >
+                        {isExtractingMemory ? 'Extracting...' : 'Update Memory'}
+                      </button>
+                    </div>
+                    <textarea
+                      value={memoryContent}
+                      onChange={(event) => setMemoryContent(event.target.value)}
+                      rows={10}
+                      placeholder="Memory is empty. Chat with the AI or click 'Update Memory' to extract memories from your conversations."
+                    />
+                    <div className="settings-actions">
+                      <button className="button primary" onClick={handleMemorySave}>
+                        Save Memory
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {settingsTab === 'usage' && (
+                <>
+                  {/* Usage Overview */}
+                  <div className="settings-card usage-overview">
+                    <h3>Usage Overview</h3>
+                    {usageStats ? (
+                      <div className="usage-stats-grid">
+                        <div className="usage-stat">
+                          <span className="usage-stat-value">{formatCost(usageStats.totalCost)}</span>
+                          <span className="usage-stat-label">Total Cost</span>
+                        </div>
+                        <div className="usage-stat">
+                          <span className="usage-stat-value">{usageStats.totalMessages.toLocaleString()}</span>
+                          <span className="usage-stat-label">Total Messages</span>
+                        </div>
+                        <div className="usage-stat">
+                          <span className="usage-stat-value">{usageStats.totalThreads.toLocaleString()}</span>
+                          <span className="usage-stat-label">Total Chats</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="usage-stats-grid">
+                        <div className="usage-stat">
+                          <span className="usage-stat-value">{formatCost(threads.reduce((sum, t) => sum + (t.totalCost || 0), 0))}</span>
+                          <span className="usage-stat-label">Total Cost</span>
+                        </div>
+                        <div className="usage-stat">
+                          <span className="usage-stat-value">{threads.length}</span>
+                          <span className="usage-stat-label">Total Chats</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Cost by Model */}
+                  <div className="settings-card">
+                    <h3>Cost by Model</h3>
+                    {usageStats && Object.keys(usageStats.costByModel).length > 0 ? (
+                      <div className="usage-model-list">
+                        {Object.entries(usageStats.costByModel)
+                          .sort(([, a], [, b]) => b - a)
+                          .map(([modelId, cost]) => (
+                            <div key={modelId} className="usage-model-row">
+                              <span className="usage-model-name">{modelId}</span>
+                              <span className="usage-model-cost">{formatCost(cost)}</span>
+                              <span className="usage-model-messages">
+                                {usageStats.messagesByModel[modelId] || 0} messages
+                              </span>
+                            </div>
+                          ))}
+                      </div>
+                    ) : (
+                      <p className="usage-empty">No usage data available yet. Start chatting to see your usage breakdown.</p>
+                    )}
+                  </div>
+
+                  {/* Recent Activity */}
+                  <div className="settings-card">
+                    <h3>Recent Chats</h3>
+                    <div className="usage-recent-list">
+                      {threads.slice(0, 10).map((thread) => (
+                        <div key={thread.id} className="usage-recent-row">
+                          <span className="usage-recent-title">{thread.title || 'Untitled chat'}</span>
+                          <span className="usage-recent-cost">{formatCost(thread.totalCost)}</span>
+                          <span className="usage-recent-date">
+                            {new Date(thread.updatedAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                      ))}
+                      {threads.length === 0 && (
+                        <p className="usage-empty">No chats yet.</p>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </section>
         )}

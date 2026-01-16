@@ -11,6 +11,23 @@ import {
 
 export type SettingsRecord = {
   systemPrompt: string | null;
+  defaultModelId: string | null;
+  defaultThinkingLevel: string | null;
+  enabledModelIds: string[];
+  enabledTools: string[];
+  hideCostPerMessage: boolean;
+  notifications: boolean;
+  fontFamily: string;
+  fontSize: string;
+};
+
+export type UsageStats = {
+  totalCost: number;
+  totalMessages: number;
+  totalThreads: number;
+  costByModel: Record<string, number>;
+  messagesByModel: Record<string, number>;
+  dailyCosts: Array<{ date: string; cost: number }>;
 };
 
 export type CreateThreadInput = {
@@ -43,7 +60,8 @@ export type CreateAttachmentInput = {
 export interface ChatRepository {
   ensureDefaultUser(): Promise<string>;
   getSettings(): Promise<SettingsRecord>;
-  updateSettings(systemPrompt: string | null): Promise<SettingsRecord>;
+  updateSettings(settings: Partial<SettingsRecord>): Promise<SettingsRecord>;
+  getUsageStats(): Promise<UsageStats>;
   listModels(): Promise<ModelInfo[]>;
   upsertModels(models: ModelInfo[]): Promise<void>;
   listThreads(): Promise<ThreadSummary[]>;
