@@ -433,6 +433,7 @@ ${firstMessage.slice(0, 500)}`;
    */
   async resumeStream(
     streamId: string,
+    userId: string,
     onDelta: (chunk: string) => void,
     onCatchup: (data: {
       userMessageId: string;
@@ -473,7 +474,7 @@ ${firstMessage.slice(0, 500)}`;
       throw new Error('Model not found');
     }
 
-    const settings = await this.repo.getSettings();
+    const settings = await this.repo.getSettings(userId);
     const history = await this.repo.getThreadMessages(stream.threadId);
     const systemPrompt = settings.systemPrompt?.trim();
     const memory = await this.options.memoryStore?.read();

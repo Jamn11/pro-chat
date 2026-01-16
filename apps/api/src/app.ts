@@ -425,6 +425,7 @@ export function createApp({
     let sendEvent: ((event: string, data: unknown) => void) | null = null;
 
     try {
+      const userId = getUserId(req);
       const parsed = resumeSchema.parse(req.body);
 
       res.writeHead(200, {
@@ -466,6 +467,7 @@ export function createApp({
 
       const result = await chatService.resumeStream(
         parsed.streamId,
+        userId,
         (chunk) => {
           sendEvent?.('delta', { content: chunk });
         },
