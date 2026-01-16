@@ -11,7 +11,9 @@ import {
   CreateAttachmentInput,
   CreateMessageInput,
   CreateThreadInput,
+  CreateUsageRecordInput,
   SettingsRecord,
+  UsageRecord,
   UsageStats,
 } from './types';
 
@@ -34,6 +36,7 @@ export class InMemoryChatRepository implements ChatRepository {
   private threads = new Map<string, InternalThread>();
   private messages = new Map<string, MessageRecord>();
   private attachments = new Map<string, AttachmentRecord>();
+  private usageRecords: UsageRecord[] = [];
 
   async ensureDefaultUser(): Promise<string> {
     return this.userId;
@@ -49,40 +52,47 @@ export class InMemoryChatRepository implements ChatRepository {
   }
 
   async getUsageStats(): Promise<UsageStats> {
-    const allMessages = [...this.messages.values()];
-    const allThreads = [...this.threads.values()];
-
     const costByModel: Record<string, number> = {};
     const messagesByModel: Record<string, number> = {};
+    const costsByDate = new Map<string, number>();
+    let totalCost = 0;
 
-    for (const message of allMessages) {
-      if (message.modelId && message.cost) {
-        costByModel[message.modelId] = (costByModel[message.modelId] || 0) + message.cost;
-        messagesByModel[message.modelId] = (messagesByModel[message.modelId] || 0) + 1;
-      }
+    // Use usage records for stats (persists even when chats are deleted)
+    for (const record of this.usageRecords) {
+      totalCost += record.cost;
+      costByModel[record.modelId] = (costByModel[record.modelId] || 0) + record.cost;
+      messagesByModel[record.modelId] = (messagesByModel[record.modelId] || 0) + 1;
+      const date = record.createdAt.toISOString().split('T')[0];
+      costsByDate.set(date, (costsByDate.get(date) || 0) + record.cost);
     }
 
     const dailyCosts: Array<{ date: string; cost: number }> = [];
-    const costsByDate = new Map<string, number>();
-    for (const message of allMessages) {
-      if (message.cost) {
-        const date = message.createdAt.toISOString().split('T')[0];
-        costsByDate.set(date, (costsByDate.get(date) || 0) + message.cost);
-      }
-    }
     for (const [date, cost] of costsByDate) {
       dailyCosts.push({ date, cost });
     }
     dailyCosts.sort((a, b) => a.date.localeCompare(b.date));
 
     return {
-      totalCost: allThreads.reduce((sum, t) => sum + t.totalCost, 0),
-      totalMessages: allMessages.length,
-      totalThreads: allThreads.length,
+      totalCost,
+      totalMessages: this.usageRecords.length,
+      totalThreads: this.threads.size,
       costByModel,
       messagesByModel,
       dailyCosts,
     };
+  }
+
+  async createUsageRecord(input: CreateUsageRecordInput): Promise<UsageRecord> {
+    const record: UsageRecord = {
+      id: randomUUID(),
+      modelId: input.modelId,
+      cost: input.cost,
+      promptTokens: input.promptTokens,
+      completionTokens: input.completionTokens,
+      createdAt: new Date(),
+    };
+    this.usageRecords.push(record);
+    return record;
   }
 
   async listModels(): Promise<ModelInfo[]> {

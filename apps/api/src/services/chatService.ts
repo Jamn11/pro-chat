@@ -318,6 +318,14 @@ export class ChatService {
 
     const totalCost = await this.repo.incrementThreadCost(input.threadId, cost);
 
+    // Create a usage record for persistent cost tracking (survives chat deletion)
+    await this.repo.createUsageRecord({
+      modelId: model.id,
+      cost,
+      promptTokens: promptTokens || 0,
+      completionTokens: completionTokens || 0,
+    });
+
     return {
       userMessage,
       assistantMessage,

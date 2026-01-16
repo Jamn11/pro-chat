@@ -30,6 +30,22 @@ export type UsageStats = {
   dailyCosts: Array<{ date: string; cost: number }>;
 };
 
+export type UsageRecord = {
+  id: string;
+  modelId: string;
+  cost: number;
+  promptTokens: number;
+  completionTokens: number;
+  createdAt: Date;
+};
+
+export type CreateUsageRecordInput = {
+  modelId: string;
+  cost: number;
+  promptTokens: number;
+  completionTokens: number;
+};
+
 export type CreateThreadInput = {
   title?: string | null;
 };
@@ -62,6 +78,7 @@ export interface ChatRepository {
   getSettings(): Promise<SettingsRecord>;
   updateSettings(settings: Partial<SettingsRecord>): Promise<SettingsRecord>;
   getUsageStats(): Promise<UsageStats>;
+  createUsageRecord(input: CreateUsageRecordInput): Promise<UsageRecord>;
   listModels(): Promise<ModelInfo[]>;
   upsertModels(models: ModelInfo[]): Promise<void>;
   listThreads(): Promise<ThreadSummary[]>;

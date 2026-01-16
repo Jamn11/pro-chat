@@ -256,9 +256,10 @@
 }
 
 .message-content {
+  font-family: var(--chat-font-family);
   font-size: var(--chat-text-size);
   white-space: normal;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 .message.user .message-content {
@@ -623,6 +624,22 @@
   justify-content: flex-end;
 }
 
+.settings-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-dirty-banner {
+  background: var(--accent);
+  color: #0b0f14;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  text-align: center;
+}
+
 /* Settings Tabs */
 .settings-tabs {
   display: flex;
@@ -702,14 +719,38 @@
   color: var(--text);
 }
 
-/* Settings Select */
+/* Settings Select - matches composer dropdown styling */
 .settings-select {
-  padding: 10px 14px;
-  border-radius: 10px;
+  padding: 10px 36px 10px 14px;
+  border-radius: 12px;
   border: 1px solid var(--border);
   background: var(--panel-muted);
   color: var(--text);
   width: 100%;
+  font-size: inherit;
+  font-family: inherit;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-position: right 12px center;
+  background-repeat: no-repeat;
+}
+
+.settings-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.settings-select option {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.settings-field .settings-select {
+  padding: 8px 32px 8px 12px;
 }
 
 /* Toggle Button */

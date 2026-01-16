@@ -13,7 +13,9 @@ import {
   CreateAttachmentInput,
   CreateMessageInput,
   CreateThreadInput,
+  CreateUsageRecordInput,
   SettingsRecord,
+  UsageRecord,
   UsageStats,
 } from './types';
 
@@ -31,6 +33,8 @@ export class PrismaChatRepository implements ChatRepository {
     fontFamily: 'Space Mono',
     fontSize: 'medium',
   };
+  // Store usage records in memory (persists across chat deletions within session)
+  private usageRecords: UsageRecord[] = [];
 
   constructor(prismaClient?: PrismaClient) {
     this.prisma = prismaClient ?? new PrismaClient();
@@ -80,6 +84,21 @@ export class PrismaChatRepository implements ChatRepository {
   }
 
   async getUsageStats(): Promise<UsageStats> {
+    const costByModel: Record<string, number> = {};
+    const messagesByModel: Record<string, number> = {};
+    const costsByDate = new Map<string, number>();
+    let totalCost = 0;
+
+    // Use usage records for stats (persists even when chats are deleted)
+    for (const record of this.usageRecords) {
+      totalCost += record.cost;
+      costByModel[record.modelId] = (costByModel[record.modelId] || 0) + record.cost;
+      messagesByModel[record.modelId] = (messagesByModel[record.modelId] || 0) + 1;
+      const date = record.createdAt.toISOString().split('T')[0];
+      costsByDate.set(date, (costsByDate.get(date) || 0) + record.cost);
+    }
+
+    // Also include historical data from existing messages (for backward compatibility)
     const messages = await this.prisma.message.findMany({
       select: {
         modelId: true,
@@ -88,26 +107,21 @@ export class PrismaChatRepository implements ChatRepository {
       },
     });
 
-    const threads = await this.prisma.chatThread.findMany({
-      select: {
-        totalCost: true,
-      },
-    });
-
-    const costByModel: Record<string, number> = {};
-    const messagesByModel: Record<string, number> = {};
-    const costsByDate = new Map<string, number>();
-
     for (const message of messages) {
       if (message.modelId && message.cost) {
+        // Only count if not already tracked in usage records
+        // This avoids double counting for new messages
+        totalCost += message.cost;
         costByModel[message.modelId] = (costByModel[message.modelId] || 0) + message.cost;
         messagesByModel[message.modelId] = (messagesByModel[message.modelId] || 0) + 1;
-      }
-      if (message.cost) {
         const date = message.createdAt.toISOString().split('T')[0];
         costsByDate.set(date, (costsByDate.get(date) || 0) + message.cost);
       }
     }
+
+    const threads = await this.prisma.chatThread.findMany({
+      select: { id: true },
+    });
 
     const dailyCosts: Array<{ date: string; cost: number }> = [];
     for (const [date, cost] of costsByDate) {
@@ -116,13 +130,26 @@ export class PrismaChatRepository implements ChatRepository {
     dailyCosts.sort((a, b) => a.date.localeCompare(b.date));
 
     return {
-      totalCost: threads.reduce((sum, t) => sum + t.totalCost, 0),
-      totalMessages: messages.length,
+      totalCost,
+      totalMessages: this.usageRecords.length + messages.length,
       totalThreads: threads.length,
       costByModel,
       messagesByModel,
       dailyCosts,
     };
+  }
+
+  async createUsageRecord(input: CreateUsageRecordInput): Promise<UsageRecord> {
+    const record: UsageRecord = {
+      id: `usage-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+      modelId: input.modelId,
+      cost: input.cost,
+      promptTokens: input.promptTokens,
+      completionTokens: input.completionTokens,
+      createdAt: new Date(),
+    };
+    this.usageRecords.push(record);
+    return record;
   }
 
   async listModels(): Promise<ModelInfo[]> {

@@ -144,6 +144,8 @@ export default function App() {
     fontSize: 'medium',
   });
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
+  const [pendingSettings, setPendingSettings] = useState<Settings | null>(null);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [theme, setTheme] = useState<Theme>(() => {
     if (typeof window === 'undefined') return 'dark';
     const storage = window.localStorage;
@@ -209,6 +211,29 @@ export default function App() {
     });
   }, [slashCommand, isThinkingCommand, thinkingOptions]);
   const slashCommandActive = slashCommand !== null;
+
+  // Effective settings: use pending if available, otherwise saved
+  const effectiveSettings = pendingSettings ?? settings;
+  const settingsDirty = pendingSettings !== null;
+
+  // Apply font settings via CSS variables
+  useEffect(() => {
+    const fontSizeMap: Record<string, string> = {
+      small: '0.875rem',
+      medium: '1rem',
+      large: '1.125rem',
+    };
+    document.documentElement.style.setProperty(
+      '--chat-font-family',
+      effectiveSettings.fontFamily === 'system-ui'
+        ? 'system-ui, -apple-system, sans-serif'
+        : `"${effectiveSettings.fontFamily}", monospace`
+    );
+    document.documentElement.style.setProperty(
+      '--chat-text-size',
+      fontSizeMap[effectiveSettings.fontSize] || '1rem'
+    );
+  }, [effectiveSettings.fontFamily, effectiveSettings.fontSize]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -537,6 +562,11 @@ export default function App() {
             fetchMemory()
               .then((memory) => setMemoryContent(memory.content ?? ''))
               .catch(() => {});
+            // Show notification if enabled and page not focused
+            if (document.hidden) {
+              const preview = data.assistantMessage.content?.slice(0, 100) || 'Response ready';
+              showNotification('Pro Chat', preview);
+            }
           },
           onError: (message) => {
             setMessages((prev) =>
@@ -577,16 +607,58 @@ export default function App() {
     }
   };
 
-  const handleSettingsSave = async (newSettings?: Partial<Settings>) => {
+  const handleSettingsSave = async () => {
+    if (!pendingSettings) return;
+    setIsSavingSettings(true);
     try {
-      const toSave = newSettings ?? { systemPrompt };
-      const updated = await updateSettings(toSave);
-      setSettings(prev => ({ ...prev, ...updated }));
+      const updated = await updateSettings(pendingSettings);
+      setSettings(updated);
+      setPendingSettings(null);
       if (updated.systemPrompt !== undefined) {
         setSystemPrompt(updated.systemPrompt ?? '');
       }
+      setErrorMessage('Settings saved successfully');
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to save settings');
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
+  const handleSettingsChange = (changes: Partial<Settings>) => {
+    setPendingSettings(prev => ({
+      ...(prev ?? settings),
+      ...changes,
+    }));
+  };
+
+  const handleSettingsDiscard = () => {
+    setPendingSettings(null);
+  };
+
+  const requestNotificationPermission = async () => {
+    if (!('Notification' in window)) {
+      setErrorMessage('Browser does not support notifications');
+      return false;
+    }
+    if (Notification.permission === 'granted') {
+      return true;
+    }
+    if (Notification.permission === 'denied') {
+      setErrorMessage('Notification permission denied. Please enable in browser settings.');
+      return false;
+    }
+    const permission = await Notification.requestPermission();
+    if (permission === 'granted') {
+      return true;
+    }
+    setErrorMessage('Notification permission denied');
+    return false;
+  };
+
+  const showNotification = (title: string, body: string) => {
+    if (effectiveSettings.notifications && Notification.permission === 'granted') {
+      new Notification(title, { body, icon: '/favicon.ico' });
     }
   };
 
@@ -900,10 +972,35 @@ export default function App() {
                 <h2>Settings</h2>
                 <p>Customize your experience, models, and preferences.</p>
               </div>
-              <button className="button ghost" onClick={() => setActiveView('chat')}>
-                Back to Chat
-              </button>
+              <div className="settings-header-actions">
+                {settingsDirty && (
+                  <>
+                    <button
+                      className="button ghost"
+                      onClick={handleSettingsDiscard}
+                      disabled={isSavingSettings}
+                    >
+                      Discard
+                    </button>
+                    <button
+                      className="button primary"
+                      onClick={handleSettingsSave}
+                      disabled={isSavingSettings}
+                    >
+                      {isSavingSettings ? 'Saving...' : 'Save Changes'}
+                    </button>
+                  </>
+                )}
+                <button className="button ghost" onClick={() => setActiveView('chat')}>
+                  Back to Chat
+                </button>
+              </div>
             </div>
+            {settingsDirty && (
+              <div className="settings-dirty-banner">
+                You have unsaved changes
+              </div>
+            )}
 
             <div className="settings-tabs">
               <button
@@ -957,12 +1054,9 @@ export default function App() {
                       <div className="settings-field">
                         <label>Font Family</label>
                         <select
-                          value={settings.fontFamily}
-                          onChange={(e) => {
-                            const newSettings = { ...settings, fontFamily: e.target.value };
-                            setSettings(newSettings);
-                            handleSettingsSave({ fontFamily: e.target.value });
-                          }}
+                          className="settings-select"
+                          value={effectiveSettings.fontFamily}
+                          onChange={(e) => handleSettingsChange({ fontFamily: e.target.value })}
                         >
                           <option value="Space Mono">Space Mono</option>
                           <option value="Inter">Inter</option>
@@ -975,12 +1069,9 @@ export default function App() {
                       <div className="settings-field">
                         <label>Font Size</label>
                         <select
-                          value={settings.fontSize}
-                          onChange={(e) => {
-                            const newSettings = { ...settings, fontSize: e.target.value };
-                            setSettings(newSettings);
-                            handleSettingsSave({ fontSize: e.target.value });
-                          }}
+                          className="settings-select"
+                          value={effectiveSettings.fontSize}
+                          onChange={(e) => handleSettingsChange({ fontSize: e.target.value })}
                         >
                           <option value="small">Small</option>
                           <option value="medium">Medium</option>
@@ -998,14 +1089,10 @@ export default function App() {
                         <p>Hide individual message costs in the chat view.</p>
                       </div>
                       <button
-                        className={`toggle-button ${settings.hideCostPerMessage ? 'active' : ''}`}
-                        onClick={() => {
-                          const newVal = !settings.hideCostPerMessage;
-                          setSettings({ ...settings, hideCostPerMessage: newVal });
-                          handleSettingsSave({ hideCostPerMessage: newVal });
-                        }}
+                        className={`toggle-button ${effectiveSettings.hideCostPerMessage ? 'active' : ''}`}
+                        onClick={() => handleSettingsChange({ hideCostPerMessage: !effectiveSettings.hideCostPerMessage })}
                       >
-                        {settings.hideCostPerMessage ? 'On' : 'Off'}
+                        {effectiveSettings.hideCostPerMessage ? 'On' : 'Off'}
                       </button>
                     </div>
                   </div>
@@ -1018,14 +1105,17 @@ export default function App() {
                         <p>Enable browser notifications for completed responses.</p>
                       </div>
                       <button
-                        className={`toggle-button ${settings.notifications ? 'active' : ''}`}
-                        onClick={() => {
-                          const newVal = !settings.notifications;
-                          setSettings({ ...settings, notifications: newVal });
-                          handleSettingsSave({ notifications: newVal });
+                        className={`toggle-button ${effectiveSettings.notifications ? 'active' : ''}`}
+                        onClick={async () => {
+                          const newVal = !effectiveSettings.notifications;
+                          if (newVal) {
+                            const granted = await requestNotificationPermission();
+                            if (!granted) return;
+                          }
+                          handleSettingsChange({ notifications: newVal });
                         }}
                       >
-                        {settings.notifications ? 'On' : 'Off'}
+                        {effectiveSettings.notifications ? 'On' : 'Off'}
                       </button>
                     </div>
                   </div>
@@ -1040,12 +1130,8 @@ export default function App() {
                     </div>
                     <select
                       className="settings-select"
-                      value={settings.defaultModelId ?? ''}
-                      onChange={(e) => {
-                        const newVal = e.target.value || null;
-                        setSettings({ ...settings, defaultModelId: newVal });
-                        handleSettingsSave({ defaultModelId: newVal });
-                      }}
+                      value={effectiveSettings.defaultModelId ?? ''}
+                      onChange={(e) => handleSettingsChange({ defaultModelId: e.target.value || null })}
                     >
                       <option value="">Use first available</option>
                       {models.map((model) => (
@@ -1066,12 +1152,8 @@ export default function App() {
                     </div>
                     <select
                       className="settings-select"
-                      value={settings.defaultThinkingLevel ?? ''}
-                      onChange={(e) => {
-                        const newVal = e.target.value || null;
-                        setSettings({ ...settings, defaultThinkingLevel: newVal });
-                        handleSettingsSave({ defaultThinkingLevel: newVal });
-                      }}
+                      value={effectiveSettings.defaultThinkingLevel ?? ''}
+                      onChange={(e) => handleSettingsChange({ defaultThinkingLevel: e.target.value || null })}
                     >
                       <option value="">Off</option>
                       <option value="low">Low</option>
@@ -1091,8 +1173,7 @@ export default function App() {
                         className="button ghost"
                         onClick={() => {
                           const allIds = models.map(m => m.id);
-                          setSettings({ ...settings, enabledModelIds: allIds });
-                          handleSettingsSave({ enabledModelIds: allIds });
+                          handleSettingsChange({ enabledModelIds: allIds });
                         }}
                       >
                         Enable All
@@ -1100,7 +1181,7 @@ export default function App() {
                     </div>
                     <div className="settings-model-list">
                       {models.map((model) => {
-                        const isEnabled = settings.enabledModelIds.length === 0 || settings.enabledModelIds.includes(model.id);
+                        const isEnabled = effectiveSettings.enabledModelIds.length === 0 || effectiveSettings.enabledModelIds.includes(model.id);
                         return (
                           <label key={model.id} className="settings-checkbox">
                             <input
@@ -1108,15 +1189,14 @@ export default function App() {
                               checked={isEnabled}
                               onChange={(e) => {
                                 let newIds: string[];
-                                if (settings.enabledModelIds.length === 0) {
+                                if (effectiveSettings.enabledModelIds.length === 0) {
                                   newIds = models.filter(m => m.id !== model.id).map(m => m.id);
                                 } else if (e.target.checked) {
-                                  newIds = [...settings.enabledModelIds, model.id];
+                                  newIds = [...effectiveSettings.enabledModelIds, model.id];
                                 } else {
-                                  newIds = settings.enabledModelIds.filter(id => id !== model.id);
+                                  newIds = effectiveSettings.enabledModelIds.filter(id => id !== model.id);
                                 }
-                                setSettings({ ...settings, enabledModelIds: newIds });
-                                handleSettingsSave({ enabledModelIds: newIds });
+                                handleSettingsChange({ enabledModelIds: newIds });
                               }}
                             />
                             <span className="checkbox-label">{model.label}</span>
@@ -1141,7 +1221,7 @@ export default function App() {
                         { id: 'code_interpreter', label: 'Code Interpreter', description: 'Execute code and analyze data' },
                         { id: 'memory', label: 'Memory', description: 'Remember facts across conversations' },
                       ].map((tool) => {
-                        const isEnabled = settings.enabledTools.includes(tool.id);
+                        const isEnabled = effectiveSettings.enabledTools.includes(tool.id);
                         return (
                           <label key={tool.id} className="settings-checkbox tool">
                             <input
@@ -1149,10 +1229,9 @@ export default function App() {
                               checked={isEnabled}
                               onChange={(e) => {
                                 const newTools = e.target.checked
-                                  ? [...settings.enabledTools, tool.id]
-                                  : settings.enabledTools.filter(t => t !== tool.id);
-                                setSettings({ ...settings, enabledTools: newTools });
-                                handleSettingsSave({ enabledTools: newTools });
+                                  ? [...effectiveSettings.enabledTools, tool.id]
+                                  : effectiveSettings.enabledTools.filter(t => t !== tool.id);
+                                handleSettingsChange({ enabledTools: newTools });
                               }}
                             />
                             <div className="checkbox-content">
@@ -1178,16 +1257,11 @@ export default function App() {
                       </div>
                     </div>
                     <textarea
-                      value={systemPrompt}
-                      onChange={(event) => setSystemPrompt(event.target.value)}
+                      value={pendingSettings?.systemPrompt ?? systemPrompt}
+                      onChange={(event) => handleSettingsChange({ systemPrompt: event.target.value })}
                       rows={8}
                       placeholder="Enter custom instructions for the AI..."
                     />
-                    <div className="settings-actions">
-                      <button className="button primary" onClick={() => handleSettingsSave({ systemPrompt })}>
-                        Save Prompt
-                      </button>
-                    </div>
                   </div>
 
                   {/* Memory */}
