@@ -420,7 +420,22 @@ export default function App() {
     setAttachments([]);
     setComposer('');
     setActiveView('chat');
-  }, []);
+
+    // Reset to default model from settings
+    const defaultModelId = settings.defaultModelId;
+    if (defaultModelId && models.some(m => m.id === defaultModelId)) {
+      setSelectedModelId(defaultModelId);
+    } else if (models.length > 0) {
+      setSelectedModelId(models[0].id);
+    }
+
+    // Reset to default thinking level from settings
+    if (settings.defaultThinkingLevel) {
+      setThinkingLevel(settings.defaultThinkingLevel as ThinkingLevel);
+    } else {
+      setThinkingLevel('medium');
+    }
+  }, [settings.defaultModelId, settings.defaultThinkingLevel, models]);
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
