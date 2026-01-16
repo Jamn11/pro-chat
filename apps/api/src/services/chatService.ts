@@ -42,6 +42,7 @@ type SendMessageCallbacks = {
   onToolStart?: (toolName: string) => void;
   onReasoning?: (delta: string) => void;
   onToolResult?: (toolName: string, result: string) => void;
+  onStreamStart?: (streamId: string) => void;
 };
 
 export type SendMessageResult = {
@@ -258,6 +259,9 @@ ${firstMessage.slice(0, 500)}`;
         thinkingLevel: input.thinkingLevel,
       });
       streamId = stream.id;
+
+      // Notify caller of stream ID immediately (before streaming starts)
+      callbacks?.onStreamStart?.(streamId);
 
       // Create assistant message early with empty content
       const earlyAssistantMsg = await this.repo.createMessage({

@@ -14,6 +14,7 @@ export type StreamProgressUpdate = {
 };
 
 const TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
+const ORPHAN_THRESHOLD_MS = 30 * 1000; // 30 seconds - consider active stream orphaned if stale this long
 const UPDATE_DEBOUNCE_MS = 2000; // 2 seconds
 const UPDATE_CHAR_THRESHOLD = 500; // Update every 500 chars
 
@@ -201,23 +202,33 @@ export class StreamTracker {
   }
 
   /**
-   * Find a resumable stream for a thread (status: pending)
+   * Find a resumable stream for a thread (status: pending or orphaned active)
    */
   async findResumableStream(threadId: string): Promise<ActiveStreamRecord | null> {
     const stream = await this.repo.getActiveStreamByThread(threadId);
     if (!stream) return null;
 
-    // Only return pending streams that haven't timed out
-    if (stream.status !== 'pending') return null;
-
     const age = Date.now() - stream.lastActivityAt.getTime();
+
+    // Check for timeout first
     if (age > TIMEOUT_MS) {
       // Stream has timed out, mark as failed
       await this.failStream(stream.id);
       return null;
     }
 
-    return stream;
+    // Pending streams that haven't timed out are resumable
+    if (stream.status === 'pending') {
+      return stream;
+    }
+
+    // Active streams that appear orphaned (stale > 30 seconds) are also resumable
+    // This handles cases where markPending wasn't called (e.g., server restart)
+    if (stream.status === 'active' && age > ORPHAN_THRESHOLD_MS) {
+      return stream;
+    }
+
+    return null;
   }
 
   /**

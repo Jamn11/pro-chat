@@ -378,16 +378,13 @@ export function createApp({
           onReasoning: (delta) => {
             sendEvent?.('reasoning', { delta });
           },
+          onStreamStart: (streamId) => {
+            // Capture stream ID immediately for abort handling
+            currentStreamId = streamId;
+            sendEvent?.('streamId', { streamId });
+          },
         },
       );
-
-      // Store stream ID for potential abort handling
-      currentStreamId = result.streamId;
-
-      // Send stream ID in meta if available (for resume support)
-      if (result.streamId) {
-        sendEvent('streamId', { streamId: result.streamId });
-      }
 
       sendEvent('done', {
         userMessage: result.userMessage,
