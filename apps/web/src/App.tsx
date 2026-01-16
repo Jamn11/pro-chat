@@ -432,14 +432,19 @@ export default function App() {
 
     let threadId = activeThreadIdRef.current;
     if (!threadId) {
-      const title = content.trim().slice(0, 60) || null;
-      const newThread = await createThread(title);
+      const newThread = await createThread(null);
       setThreads((prev) => [newThread, ...prev]);
       activeThreadIdRef.current = newThread.id;
       skipNextFetchRef.current = newThread.id;
       setActiveThreadId(newThread.id);
       setActiveView('chat');
       threadId = newThread.id;
+      // Refresh threads after delay to pick up LLM-generated title
+      setTimeout(() => {
+        fetchThreads()
+          .then((threadList) => setThreads(threadList))
+          .catch(() => {});
+      }, 2000);
     }
 
     const tempUserId = `temp-user-${Date.now()}`;
@@ -601,12 +606,6 @@ export default function App() {
             fetchMemory()
               .then((memory) => setMemoryContent(memory.content ?? ''))
               .catch(() => {});
-            // Re-fetch threads after a delay to get LLM-generated title
-            setTimeout(() => {
-              fetchThreads()
-                .then((threadList) => setThreads(threadList))
-                .catch(() => {});
-            }, 1500);
           },
           onError: (message) => {
             setMessages((prev) =>
