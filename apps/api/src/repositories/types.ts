@@ -13,6 +13,39 @@ import {
 
 export type SettingsRecord = {
   systemPrompt: string | null;
+  defaultModelId: string | null;
+  defaultThinkingLevel: string | null;
+  enabledModelIds: string[];
+  enabledTools: string[];
+  hideCostPerMessage: boolean;
+  notifications: boolean;
+  fontFamily: string;
+  fontSize: string;
+};
+
+export type UsageStats = {
+  totalCost: number;
+  totalMessages: number;
+  totalThreads: number;
+  costByModel: Record<string, number>;
+  messagesByModel: Record<string, number>;
+  dailyStats: Array<{ date: string; cost: number; messages: number }>;
+};
+
+export type UsageRecord = {
+  id: string;
+  modelId: string;
+  cost: number;
+  promptTokens: number;
+  completionTokens: number;
+  createdAt: Date;
+};
+
+export type CreateUsageRecordInput = {
+  modelId: string;
+  cost: number;
+  promptTokens: number;
+  completionTokens: number;
 };
 
 export type UserRecord = {
@@ -87,7 +120,11 @@ export interface ChatRepository {
 
   // Settings (per-user)
   getSettings(userId: string): Promise<SettingsRecord>;
-  updateSettings(userId: string, systemPrompt: string | null): Promise<SettingsRecord>;
+  updateSettings(userId: string, settings: Partial<SettingsRecord>): Promise<SettingsRecord>;
+
+  // Usage stats (per-user)
+  getUsageStats(userId: string): Promise<UsageStats>;
+  createUsageRecord(input: CreateUsageRecordInput): Promise<UsageRecord>;
 
   // Models (shared across users)
   listModels(): Promise<ModelInfo[]>;

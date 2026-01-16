@@ -670,6 +670,14 @@ ${firstMessage.slice(0, 500)}`;
       throw new Error('User message not found');
     }
 
+    // Create a usage record for persistent cost tracking (survives chat deletion)
+    await this.repo.createUsageRecord({
+      modelId: model.id,
+      cost,
+      promptTokens: promptTokens || 0,
+      completionTokens: completionTokens || 0,
+    });
+
     return {
       userMessage,
       assistantMessage,

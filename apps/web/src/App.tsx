@@ -12,6 +12,7 @@ import {
   fetchModels,
   fetchSettings,
   fetchThreads,
+  fetchUsageStats,
   resumeStream,
   setAuthTokenGetter,
   streamChat,
@@ -21,11 +22,12 @@ import {
   uploadFiles,
 } from './api';
 import { AuthGuard, UserMenu } from './components/AuthGuard';
-import type { ActiveStreamInfo, Attachment, ModelInfo, ThreadSummary, UIMessage } from './types';
+import type { ActiveStreamInfo, Attachment, ModelInfo, Settings, ThreadSummary, UIMessage, UsageStats } from './types';
 import './App.css';
 
 type Theme = 'light' | 'dark';
 type ViewMode = 'chat' | 'settings';
+type SettingsTab = 'personalization' | 'instructions' | 'usage';
 type ThinkingLevel = 'low' | 'medium' | 'high' | 'xhigh';
 type ThinkingSelection = ThinkingLevel | null;
 
@@ -169,6 +171,21 @@ export default function App() {
   const [memoryContent, setMemoryContent] = useState('');
   const [isExtractingMemory, setIsExtractingMemory] = useState(false);
   const [activeView, setActiveView] = useState<ViewMode>('chat');
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('personalization');
+  const [settings, setSettings] = useState<Settings>({
+    systemPrompt: null,
+    defaultModelId: null,
+    defaultThinkingLevel: null,
+    enabledModelIds: [],
+    enabledTools: ['web_search', 'code_interpreter', 'memory'],
+    hideCostPerMessage: false,
+    notifications: true,
+    fontFamily: 'Space Mono',
+    fontSize: 'medium',
+  });
+  const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
+  const [pendingSettings, setPendingSettings] = useState<Settings | null>(null);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [theme, setTheme] = useState<Theme>(() => {
     if (typeof window === 'undefined') return 'dark';
     const storage = window.localStorage;
@@ -243,6 +260,29 @@ export default function App() {
   }, [slashCommand, isThinkingCommand, thinkingOptions]);
   const slashCommandActive = slashCommand !== null;
 
+  // Effective settings: use pending if available, otherwise saved
+  const effectiveSettings = pendingSettings ?? settings;
+  const settingsDirty = pendingSettings !== null;
+
+  // Apply font settings via CSS variables
+  useEffect(() => {
+    const fontSizeMap: Record<string, string> = {
+      small: '0.875rem',
+      medium: '1rem',
+      large: '1.125rem',
+    };
+    document.documentElement.style.setProperty(
+      '--chat-font-family',
+      effectiveSettings.fontFamily === 'system-ui'
+        ? 'system-ui, -apple-system, sans-serif'
+        : `"${effectiveSettings.fontFamily}", monospace`
+    );
+    document.documentElement.style.setProperty(
+      '--chat-text-size',
+      fontSizeMap[effectiveSettings.fontSize] || '1rem'
+    );
+  }, [effectiveSettings.fontFamily, effectiveSettings.fontSize]);
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     if (
@@ -268,19 +308,48 @@ export default function App() {
     if (!isAuthLoaded) return;
 
     async function load() {
-      const [modelList, threadList, settings, memory] = await Promise.all([
+      const [modelList, threadList, fetchedSettings, memory, usage] = await Promise.all([
         fetchModels(),
         fetchThreads(),
         fetchSettings(),
         fetchMemory().catch(() => ({ content: '' })),
+        fetchUsageStats().catch(() => null),
       ]);
       setModels(modelList);
       setThreads(threadList);
-      if (modelList.length > 0) {
-        setSelectedModelId(modelList[0].id);
-      }
-      setSystemPrompt(settings.systemPrompt ?? '');
+
+      // Initialize settings with defaults for any missing fields
+      const normalizedSettings: Settings = {
+        systemPrompt: fetchedSettings.systemPrompt ?? null,
+        defaultModelId: fetchedSettings.defaultModelId ?? null,
+        defaultThinkingLevel: fetchedSettings.defaultThinkingLevel ?? null,
+        enabledModelIds: fetchedSettings.enabledModelIds ?? modelList.map(m => m.id),
+        enabledTools: fetchedSettings.enabledTools ?? ['web_search', 'code_interpreter', 'memory'],
+        hideCostPerMessage: fetchedSettings.hideCostPerMessage ?? false,
+        notifications: fetchedSettings.notifications ?? true,
+        fontFamily: fetchedSettings.fontFamily ?? 'Space Mono',
+        fontSize: fetchedSettings.fontSize ?? 'medium',
+      };
+      setSettings(normalizedSettings);
+      setSystemPrompt(normalizedSettings.systemPrompt ?? '');
       setMemoryContent(memory.content ?? '');
+      if (usage) setUsageStats(usage);
+
+      // Use default model from settings if available, otherwise first model
+      if (modelList.length > 0) {
+        const defaultId = normalizedSettings.defaultModelId;
+        if (defaultId && modelList.some(m => m.id === defaultId)) {
+          setSelectedModelId(defaultId);
+        } else {
+          setSelectedModelId(modelList[0].id);
+        }
+      }
+
+      // Use default thinking level from settings if available
+      if (normalizedSettings.defaultThinkingLevel) {
+        setThinkingLevel(normalizedSettings.defaultThinkingLevel as ThinkingLevel);
+      }
+
       if (threadList.length > 0) {
         setActiveThreadId(threadList[0].id);
       }
@@ -635,6 +704,11 @@ export default function App() {
             fetchMemory()
               .then((memory) => setMemoryContent(memory.content ?? ''))
               .catch(() => {});
+            // Show notification if enabled and page not focused
+            if (document.hidden) {
+              const preview = data.assistantMessage.content?.slice(0, 100) || 'Response ready';
+              showNotification('Pro Chat', preview);
+            }
           },
           onError: (message) => {
             setMessages((prev) =>
@@ -905,8 +979,58 @@ export default function App() {
   };
 
   const handleSettingsSave = async () => {
-    const updated = await updateSettings(systemPrompt);
-    setSystemPrompt(updated.systemPrompt ?? '');
+    if (!pendingSettings) return;
+    setIsSavingSettings(true);
+    try {
+      const updated = await updateSettings(pendingSettings);
+      setSettings(updated);
+      setPendingSettings(null);
+      if (updated.systemPrompt !== undefined) {
+        setSystemPrompt(updated.systemPrompt ?? '');
+      }
+      setErrorMessage('Settings saved successfully');
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save settings');
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
+  const handleSettingsChange = (changes: Partial<Settings>) => {
+    setPendingSettings(prev => ({
+      ...(prev ?? settings),
+      ...changes,
+    }));
+  };
+
+  const handleSettingsDiscard = () => {
+    setPendingSettings(null);
+  };
+
+  const requestNotificationPermission = async () => {
+    if (!('Notification' in window)) {
+      setErrorMessage('Browser does not support notifications');
+      return false;
+    }
+    if (Notification.permission === 'granted') {
+      return true;
+    }
+    if (Notification.permission === 'denied') {
+      setErrorMessage('Notification permission denied. Please enable in browser settings.');
+      return false;
+    }
+    const permission = await Notification.requestPermission();
+    if (permission === 'granted') {
+      return true;
+    }
+    setErrorMessage('Notification permission denied');
+    return false;
+  };
+
+  const showNotification = (title: string, body: string) => {
+    if (effectiveSettings.notifications && Notification.permission === 'granted') {
+      new Notification(title, { body, icon: '/favicon.ico' });
+    }
   };
 
   const handleMemorySave = async () => {
@@ -992,7 +1116,9 @@ export default function App() {
                 }}
               >
                 <span className="thread-title">{thread.title ?? 'Untitled chat'}</span>
-                <span className="thread-cost">{formatCost(thread.totalCost)}</span>
+                {!settings.hideCostPerMessage && (
+                  <span className="thread-cost">{formatCost(thread.totalCost)}</span>
+                )}
               </button>
               <button
                 className="thread-delete"
@@ -1116,7 +1242,7 @@ export default function App() {
                     </div>
                   )}
                   <div className="message-meta">
-                    {message.cost != null && message.role === 'assistant' && (
+                    {message.cost != null && message.role === 'assistant' && !settings.hideCostPerMessage && (
                       <span>{formatCost(message.cost)}</span>
                     )}
                     {message.role === 'assistant' && formatDuration(message.durationMs) && (
@@ -1287,69 +1413,551 @@ export default function App() {
             <div className="settings-header">
               <div>
                 <h2>Settings</h2>
-                <p>Customize your experience and system prompt.</p>
+                <p>Customize your experience, models, and preferences.</p>
               </div>
-              <button className="button ghost" onClick={() => setActiveView('chat')}>
-                Back to Chat
+              <div className="settings-header-actions">
+                {settingsDirty && (
+                  <>
+                    <button
+                      className="button ghost"
+                      onClick={handleSettingsDiscard}
+                      disabled={isSavingSettings}
+                    >
+                      Discard
+                    </button>
+                    <button
+                      className="button primary"
+                      onClick={handleSettingsSave}
+                      disabled={isSavingSettings}
+                    >
+                      {isSavingSettings ? 'Saving...' : 'Save Changes'}
+                    </button>
+                  </>
+                )}
+                <button className="button ghost" onClick={() => setActiveView('chat')}>
+                  Back to Chat
+                </button>
+              </div>
+            </div>
+            {settingsDirty && (
+              <div className="settings-dirty-banner">
+                You have unsaved changes
+              </div>
+            )}
+
+            <div className="settings-tabs">
+              <button
+                className={`settings-tab ${settingsTab === 'personalization' ? 'active' : ''}`}
+                onClick={() => setSettingsTab('personalization')}
+              >
+                Personalization
+              </button>
+              <button
+                className={`settings-tab ${settingsTab === 'instructions' ? 'active' : ''}`}
+                onClick={() => setSettingsTab('instructions')}
+              >
+                Model Instructions
+              </button>
+              <button
+                className={`settings-tab ${settingsTab === 'usage' ? 'active' : ''}`}
+                onClick={() => setSettingsTab('usage')}
+              >
+                Usage
               </button>
             </div>
-            <div className="settings-card">
-              <div className="settings-row">
-                <div>
-                  <h3>Theme</h3>
-                  <p>Toggle light or dark mode.</p>
-                </div>
-                <button
-                  className="button primary"
-                  onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-                >
-                  {theme === 'dark' ? 'Switch to Light' : 'Switch to Dark'}
-                </button>
-              </div>
-            </div>
-            <div className="settings-card">
-              <div className="settings-row">
-                <div>
-                  <h3>System Prompt</h3>
-                  <p>Applies to every message in the current session.</p>
-                </div>
-              </div>
-              <textarea
-                value={systemPrompt}
-                onChange={(event) => setSystemPrompt(event.target.value)}
-                rows={6}
-              />
-              <div className="settings-actions">
-                <button className="button primary" onClick={handleSettingsSave}>
-                  Save Prompt
-                </button>
-              </div>
-            </div>
-            <div className="settings-card">
-              <div className="settings-row">
-                <div>
-                  <h3>Memory</h3>
-                  <p>Facts and preferences about you that the AI remembers across conversations.</p>
-                </div>
-                <button
-                  className="button primary"
-                  onClick={handleMemoryExtraction}
-                  disabled={isExtractingMemory}
-                >
-                  {isExtractingMemory ? 'Extracting...' : 'Update Memory'}
-                </button>
-              </div>
-              <textarea
-                value={memoryContent}
-                onChange={(event) => setMemoryContent(event.target.value)}
-                rows={8}
-                placeholder="Memory is empty. Chat with the AI or click 'Update Memory' to extract memories from your conversations."
-              />
-              <div className="settings-actions">
-                <button className="button primary" onClick={handleMemorySave}>
-                  Save Memory
-                </button>
-              </div>
+
+            <div className="settings-content">
+              {settingsTab === 'personalization' && (
+                <>
+                  {/* Theme */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Theme</h3>
+                        <p>Toggle light or dark mode.</p>
+                      </div>
+                      <button
+                        className="button primary"
+                        onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                      >
+                        {theme === 'dark' ? 'Switch to Light' : 'Switch to Dark'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Font Settings */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Font</h3>
+                        <p>Customize the chat font family and size.</p>
+                      </div>
+                    </div>
+                    <div className="settings-grid">
+                      <div className="settings-field">
+                        <label>Font Family</label>
+                        <select
+                          className="settings-select"
+                          value={effectiveSettings.fontFamily}
+                          onChange={(e) => handleSettingsChange({ fontFamily: e.target.value })}
+                        >
+                          <option value="Space Mono">Space Mono</option>
+                          <option value="Inter">Inter</option>
+                          <option value="SF Pro">SF Pro</option>
+                          <option value="Fira Code">Fira Code</option>
+                          <option value="JetBrains Mono">JetBrains Mono</option>
+                          <option value="system-ui">System Default</option>
+                        </select>
+                      </div>
+                      <div className="settings-field">
+                        <label>Font Size</label>
+                        <select
+                          className="settings-select"
+                          value={effectiveSettings.fontSize}
+                          onChange={(e) => handleSettingsChange({ fontSize: e.target.value })}
+                        >
+                          <option value="small">Small</option>
+                          <option value="medium">Medium</option>
+                          <option value="large">Large</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Hide Cost Per Message */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Hide Cost Per Message</h3>
+                        <p>Hide individual message costs in the chat view.</p>
+                      </div>
+                      <button
+                        className={`toggle-button ${effectiveSettings.hideCostPerMessage ? 'active' : ''}`}
+                        onClick={() => handleSettingsChange({ hideCostPerMessage: !effectiveSettings.hideCostPerMessage })}
+                      >
+                        {effectiveSettings.hideCostPerMessage ? 'On' : 'Off'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Notifications */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Notifications</h3>
+                        <p>Enable browser notifications for completed responses.</p>
+                      </div>
+                      <button
+                        className={`toggle-button ${effectiveSettings.notifications ? 'active' : ''}`}
+                        onClick={async () => {
+                          const newVal = !effectiveSettings.notifications;
+                          if (newVal) {
+                            const granted = await requestNotificationPermission();
+                            if (!granted) return;
+                          }
+                          handleSettingsChange({ notifications: newVal });
+                        }}
+                      >
+                        {effectiveSettings.notifications ? 'On' : 'Off'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Default Model */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Default Model</h3>
+                        <p>Model to use when starting a new chat.</p>
+                      </div>
+                    </div>
+                    <select
+                      className="settings-select"
+                      value={effectiveSettings.defaultModelId ?? ''}
+                      onChange={(e) => handleSettingsChange({ defaultModelId: e.target.value || null })}
+                    >
+                      <option value="">Use first available</option>
+                      {models.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Default Thinking Level */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Default Thinking Level</h3>
+                        <p>Thinking level to use when starting a new chat.</p>
+                      </div>
+                    </div>
+                    <select
+                      className="settings-select"
+                      value={effectiveSettings.defaultThinkingLevel ?? ''}
+                      onChange={(e) => handleSettingsChange({ defaultThinkingLevel: e.target.value || null })}
+                    >
+                      <option value="">Off</option>
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                    </select>
+                  </div>
+
+                  {/* Model Selector */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Available Models</h3>
+                        <p>Choose which models to show in the selector.</p>
+                      </div>
+                      <button
+                        className="button ghost"
+                        onClick={() => {
+                          const allIds = models.map(m => m.id);
+                          handleSettingsChange({ enabledModelIds: allIds });
+                        }}
+                      >
+                        Enable All
+                      </button>
+                    </div>
+                    <div className="settings-model-list">
+                      {models.map((model) => {
+                        const isEnabled = effectiveSettings.enabledModelIds.length === 0 || effectiveSettings.enabledModelIds.includes(model.id);
+                        return (
+                          <label key={model.id} className="settings-checkbox">
+                            <input
+                              type="checkbox"
+                              checked={isEnabled}
+                              onChange={(e) => {
+                                let newIds: string[];
+                                if (effectiveSettings.enabledModelIds.length === 0) {
+                                  newIds = models.filter(m => m.id !== model.id).map(m => m.id);
+                                } else if (e.target.checked) {
+                                  newIds = [...effectiveSettings.enabledModelIds, model.id];
+                                } else {
+                                  newIds = effectiveSettings.enabledModelIds.filter(id => id !== model.id);
+                                }
+                                handleSettingsChange({ enabledModelIds: newIds });
+                              }}
+                            />
+                            <span className="checkbox-label">{model.label}</span>
+                            <span className="checkbox-id">{model.id}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Tool Permissions */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Tool Permissions</h3>
+                        <p>Choose which tools the AI can use.</p>
+                      </div>
+                    </div>
+                    <div className="settings-tool-list">
+                      {[
+                        { id: 'web_search', label: 'Web Search', description: 'Search the web for information' },
+                        { id: 'code_interpreter', label: 'Code Interpreter', description: 'Execute code and analyze data' },
+                        { id: 'memory', label: 'Memory', description: 'Remember facts across conversations' },
+                      ].map((tool) => {
+                        const isEnabled = effectiveSettings.enabledTools.includes(tool.id);
+                        return (
+                          <label key={tool.id} className="settings-checkbox tool">
+                            <input
+                              type="checkbox"
+                              checked={isEnabled}
+                              onChange={(e) => {
+                                const newTools = e.target.checked
+                                  ? [...effectiveSettings.enabledTools, tool.id]
+                                  : effectiveSettings.enabledTools.filter(t => t !== tool.id);
+                                handleSettingsChange({ enabledTools: newTools });
+                              }}
+                            />
+                            <div className="checkbox-content">
+                              <span className="checkbox-label">{tool.label}</span>
+                              <span className="checkbox-description">{tool.description}</span>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {settingsTab === 'instructions' && (
+                <>
+                  {/* System Prompt */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>System Prompt</h3>
+                        <p>Custom instructions that apply to every message.</p>
+                      </div>
+                    </div>
+                    <textarea
+                      value={pendingSettings?.systemPrompt ?? systemPrompt}
+                      onChange={(event) => handleSettingsChange({ systemPrompt: event.target.value })}
+                      rows={8}
+                      placeholder="Enter custom instructions for the AI..."
+                    />
+                  </div>
+
+                  {/* Memory */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>Memory</h3>
+                        <p>Facts and preferences the AI remembers across conversations.</p>
+                      </div>
+                      <button
+                        className="button primary"
+                        onClick={handleMemoryExtraction}
+                        disabled={isExtractingMemory}
+                      >
+                        {isExtractingMemory ? 'Extracting...' : 'Update Memory'}
+                      </button>
+                    </div>
+                    <textarea
+                      value={memoryContent}
+                      onChange={(event) => setMemoryContent(event.target.value)}
+                      rows={10}
+                      placeholder="Memory is empty. Chat with the AI or click 'Update Memory' to extract memories from your conversations."
+                    />
+                    <div className="settings-actions">
+                      <button className="button primary" onClick={handleMemorySave}>
+                        Save Memory
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {settingsTab === 'usage' && (
+                <>
+                  {/* Usage Overview */}
+                  <div className="settings-card usage-overview">
+                    <h3>Usage Overview</h3>
+                    {usageStats ? (
+                      <div className="usage-stats-grid">
+                        <div className="usage-stat">
+                          <span className="usage-stat-value">{formatCost(usageStats.totalCost)}</span>
+                          <span className="usage-stat-label">Total Cost</span>
+                        </div>
+                        <div className="usage-stat">
+                          <span className="usage-stat-value">{usageStats.totalMessages.toLocaleString()}</span>
+                          <span className="usage-stat-label">Total Messages</span>
+                        </div>
+                        <div className="usage-stat">
+                          <span className="usage-stat-value">{usageStats.totalThreads.toLocaleString()}</span>
+                          <span className="usage-stat-label">Total Chats</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="usage-stats-grid">
+                        <div className="usage-stat">
+                          <span className="usage-stat-value">{formatCost(threads.reduce((sum, t) => sum + (t.totalCost || 0), 0))}</span>
+                          <span className="usage-stat-label">Total Cost</span>
+                        </div>
+                        <div className="usage-stat">
+                          <span className="usage-stat-value">{threads.length}</span>
+                          <span className="usage-stat-label">Total Chats</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Daily Activity Chart */}
+                  {usageStats && usageStats.dailyStats.length > 0 && (
+                    <div className="settings-card">
+                      <h3>Daily Activity</h3>
+                      <div className="usage-chart">
+                        <div className="usage-chart-legend">
+                          <span className="usage-legend-item messages">
+                            <span className="usage-legend-dot"></span>
+                            Messages
+                          </span>
+                          <span className="usage-legend-item cost">
+                            <span className="usage-legend-dot"></span>
+                            Cost
+                          </span>
+                        </div>
+                        <svg
+                          className="usage-chart-svg"
+                          viewBox="0 0 600 220"
+                          preserveAspectRatio="xMidYMid meet"
+                        >
+                          {(() => {
+                            const data = usageStats.dailyStats.slice(-14); // Last 14 days
+                            const maxMessages = Math.max(...data.map(d => d.messages), 1);
+                            const maxCost = Math.max(...data.map(d => d.cost), 0.01);
+                            const chartWidth = 540;
+                            const chartHeight = 160;
+                            const offsetX = 40;
+                            const offsetY = 10;
+
+                            // Calculate points for lines
+                            const messagePoints = data.map((day, i) => {
+                              const x = offsetX + (i / Math.max(data.length - 1, 1)) * chartWidth;
+                              const y = offsetY + chartHeight - (day.messages / maxMessages) * chartHeight;
+                              return { x, y, ...day };
+                            });
+
+                            const costPoints = data.map((day, i) => {
+                              const x = offsetX + (i / Math.max(data.length - 1, 1)) * chartWidth;
+                              const y = offsetY + chartHeight - (day.cost / maxCost) * chartHeight;
+                              return { x, y, ...day };
+                            });
+
+                            const messagePath = messagePoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+                            const costPath = costPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+
+                            return (
+                              <>
+                                {/* Grid lines */}
+                                {[0, 0.25, 0.5, 0.75, 1].map((ratio) => (
+                                  <line
+                                    key={ratio}
+                                    x1={offsetX}
+                                    y1={offsetY + chartHeight * (1 - ratio)}
+                                    x2={offsetX + chartWidth}
+                                    y2={offsetY + chartHeight * (1 - ratio)}
+                                    stroke="var(--border)"
+                                    strokeWidth="1"
+                                    strokeDasharray={ratio === 0 ? '' : '4,4'}
+                                    opacity={0.4}
+                                  />
+                                ))}
+
+                                {/* Messages line */}
+                                <path
+                                  d={messagePath}
+                                  fill="none"
+                                  stroke="var(--accent)"
+                                  strokeWidth="2.5"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+
+                                {/* Cost line */}
+                                <path
+                                  d={costPath}
+                                  fill="none"
+                                  stroke="var(--warning, #f59e0b)"
+                                  strokeWidth="2.5"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+
+                                {/* Message points */}
+                                {messagePoints.map((p) => (
+                                  <circle
+                                    key={`msg-${p.date}`}
+                                    cx={p.x}
+                                    cy={p.y}
+                                    r="5"
+                                    fill="var(--accent)"
+                                    stroke="var(--panel)"
+                                    strokeWidth="2"
+                                  />
+                                ))}
+
+                                {/* Cost points */}
+                                {costPoints.map((p) => (
+                                  <circle
+                                    key={`cost-${p.date}`}
+                                    cx={p.x}
+                                    cy={p.y}
+                                    r="5"
+                                    fill="var(--warning, #f59e0b)"
+                                    stroke="var(--panel)"
+                                    strokeWidth="2"
+                                  />
+                                ))}
+
+                                {/* X-axis labels */}
+                                {data.map((day, i) => {
+                                  const x = offsetX + (i / Math.max(data.length - 1, 1)) * chartWidth;
+                                  const dateLabel = new Date(day.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+                                  return (
+                                    <text
+                                      key={day.date}
+                                      x={x}
+                                      y={offsetY + chartHeight + 20}
+                                      textAnchor="middle"
+                                      fill="var(--muted)"
+                                      fontSize="10"
+                                    >
+                                      {dateLabel}
+                                    </text>
+                                  );
+                                })}
+                              </>
+                            );
+                          })()}
+                        </svg>
+                        <div className="usage-chart-summary">
+                          {usageStats.dailyStats.slice(-7).map((day) => (
+                            <div key={day.date} className="usage-chart-day">
+                              <span className="usage-chart-day-date">
+                                {new Date(day.date).toLocaleDateString('en-US', { weekday: 'short' })}
+                              </span>
+                              <span className="usage-chart-day-messages">{day.messages} msgs</span>
+                              <span className="usage-chart-day-cost">{formatCost(day.cost)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Cost by Model */}
+                  <div className="settings-card">
+                    <h3>Cost by Model</h3>
+                    {usageStats && Object.keys(usageStats.costByModel).length > 0 ? (
+                      <div className="usage-model-list">
+                        {Object.entries(usageStats.costByModel)
+                          .sort(([, a], [, b]) => b - a)
+                          .map(([modelId, cost]) => (
+                            <div key={modelId} className="usage-model-row">
+                              <span className="usage-model-name">{modelId}</span>
+                              <span className="usage-model-cost">{formatCost(cost)}</span>
+                              <span className="usage-model-messages">
+                                {usageStats.messagesByModel[modelId] || 0} messages
+                              </span>
+                            </div>
+                          ))}
+                      </div>
+                    ) : (
+                      <p className="usage-empty">No usage data available yet. Start chatting to see your usage breakdown.</p>
+                    )}
+                  </div>
+
+                  {/* Recent Activity */}
+                  <div className="settings-card">
+                    <h3>Recent Chats</h3>
+                    <div className="usage-recent-list">
+                      {threads.slice(0, 10).map((thread) => (
+                        <div key={thread.id} className="usage-recent-row">
+                          <span className="usage-recent-title">{thread.title || 'Untitled chat'}</span>
+                          <span className="usage-recent-cost">{formatCost(thread.totalCost)}</span>
+                          <span className="usage-recent-date">
+                            {new Date(thread.updatedAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                      ))}
+                      {threads.length === 0 && (
+                        <p className="usage-empty">No chats yet.</p>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </section>
         )}

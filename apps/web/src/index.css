@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 :root {
   color-scheme: light dark;
@@ -13,6 +13,9 @@
   --accent-soft: rgba(29, 155, 240, 0.15);
   --danger: #d64545;
   --shadow: 0 20px 60px rgba(15, 23, 42, 0.12);
+  /* Chat font settings (set via JS) */
+  --chat-font-family: 'Space Mono', monospace;
+  --chat-text-size: 1rem;
 }
 
 [data-theme='dark'] {

@@ -40,6 +40,23 @@ export type Message = {
 
 export type Settings = {
   systemPrompt: string | null;
+  defaultModelId: string | null;
+  defaultThinkingLevel: string | null;
+  enabledModelIds: string[];
+  enabledTools: string[];
+  hideCostPerMessage: boolean;
+  notifications: boolean;
+  fontFamily: string;
+  fontSize: string;
+};
+
+export type UsageStats = {
+  totalCost: number;
+  totalMessages: number;
+  totalThreads: number;
+  costByModel: Record<string, number>;
+  messagesByModel: Record<string, number>;
+  dailyStats: Array<{ date: string; cost: number; messages: number }>;
 };
 
 export type TraceEvent = {

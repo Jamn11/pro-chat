@@ -16,10 +16,13 @@ import {
   CreateAttachmentInput,
   CreateMessageInput,
   CreateThreadInput,
+  CreateUsageRecordInput,
   SettingsRecord,
   UserRecord,
   UpsertUserFromClerkInput,
   UpdateActiveStreamInput,
+  UsageRecord,
+  UsageStats,
 } from './types';
 
 type InternalThread = ThreadRecord & { memoryCheckedAt: Date | null };
@@ -43,11 +46,24 @@ type InternalActiveStream = {
 
 export class InMemoryChatRepository implements ChatRepository {
   private users = new Map<string, InternalUser>();
+  // Store additional settings in memory (systemPrompt goes to user record)
+  private additionalSettings: Omit<SettingsRecord, 'systemPrompt'> = {
+    defaultModelId: null,
+    defaultThinkingLevel: null,
+    enabledModelIds: [],
+    enabledTools: ['web_search', 'code_interpreter', 'memory'],
+    hideCostPerMessage: false,
+    notifications: true,
+    fontFamily: 'Space Mono',
+    fontSize: 'medium',
+  };
   private models = new Map<string, ModelInfo>();
   private threads = new Map<string, InternalThread>();
   private messages = new Map<string, MessageRecord>();
   private attachments = new Map<string, AttachmentRecord>();
   private activeStreams = new Map<string, InternalActiveStream>();
+  // Store usage records in memory (persists across chat deletions within session)
+  private usageRecords: UsageRecord[] = [];
 
   // User management (Clerk integration)
   async findUserByClerkId(clerkId: string): Promise<UserRecord | null> {
@@ -91,16 +107,75 @@ export class InMemoryChatRepository implements ChatRepository {
   // Settings (per-user)
   async getSettings(userId: string): Promise<SettingsRecord> {
     const user = this.users.get(userId);
-    return { systemPrompt: user?.systemPrompt ?? null };
+    return {
+      systemPrompt: user?.systemPrompt ?? null,
+      ...this.additionalSettings,
+    };
   }
 
-  async updateSettings(userId: string, systemPrompt: string | null): Promise<SettingsRecord> {
-    const user = this.users.get(userId);
-    if (user) {
-      user.systemPrompt = systemPrompt;
-      this.users.set(userId, user);
+  async updateSettings(userId: string, settings: Partial<SettingsRecord>): Promise<SettingsRecord> {
+    // Update systemPrompt on user record if provided
+    if (settings.systemPrompt !== undefined) {
+      const user = this.users.get(userId);
+      if (user) {
+        user.systemPrompt = settings.systemPrompt;
+        this.users.set(userId, user);
+      }
     }
-    return { systemPrompt };
+    // Update other settings in additionalSettings
+    const { systemPrompt: _sp, ...rest } = settings;
+    this.additionalSettings = { ...this.additionalSettings, ...rest };
+    return this.getSettings(userId);
+  }
+
+  // Usage stats (per-user)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async getUsageStats(_userId: string): Promise<UsageStats> {
+    const costByModel: Record<string, number> = {};
+    const messagesByModel: Record<string, number> = {};
+    const statsByDate = new Map<string, { cost: number; messages: number }>();
+    let totalCost = 0;
+
+    // Use usage records for stats (persists even when chats are deleted)
+    for (const record of this.usageRecords) {
+      totalCost += record.cost;
+      costByModel[record.modelId] = (costByModel[record.modelId] || 0) + record.cost;
+      messagesByModel[record.modelId] = (messagesByModel[record.modelId] || 0) + 1;
+      const date = record.createdAt.toISOString().split('T')[0];
+      const existing = statsByDate.get(date) || { cost: 0, messages: 0 };
+      statsByDate.set(date, {
+        cost: existing.cost + record.cost,
+        messages: existing.messages + 1,
+      });
+    }
+
+    const dailyStats: Array<{ date: string; cost: number; messages: number }> = [];
+    for (const [date, stats] of statsByDate) {
+      dailyStats.push({ date, ...stats });
+    }
+    dailyStats.sort((a, b) => a.date.localeCompare(b.date));
+
+    return {
+      totalCost,
+      totalMessages: this.usageRecords.length,
+      totalThreads: this.threads.size,
+      costByModel,
+      messagesByModel,
+      dailyStats,
+    };
+  }
+
+  async createUsageRecord(input: CreateUsageRecordInput): Promise<UsageRecord> {
+    const record: UsageRecord = {
+      id: randomUUID(),
+      modelId: input.modelId,
+      cost: input.cost,
+      promptTokens: input.promptTokens,
+      completionTokens: input.completionTokens,
+      createdAt: new Date(),
+    };
+    this.usageRecords.push(record);
+    return record;
   }
 
   async listModels(): Promise<ModelInfo[]> {
