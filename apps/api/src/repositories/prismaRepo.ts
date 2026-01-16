@@ -26,17 +26,6 @@ import {
 
 export class PrismaChatRepository implements ChatRepository {
   private prisma: PrismaClient;
-  // Store additional settings in memory (systemPrompt goes to DB per-user)
-  private additionalSettings: Omit<SettingsRecord, 'systemPrompt'> = {
-    defaultModelId: null,
-    defaultThinkingLevel: null,
-    enabledModelIds: [],
-    enabledTools: ['web_search', 'code_interpreter', 'memory'],
-    hideCostPerMessage: false,
-    notifications: true,
-    fontFamily: 'Space Mono',
-    fontSize: 'medium',
-  };
   // Store usage records in memory (persists across chat deletions within session)
   private usageRecords: UsageRecord[] = [];
 
@@ -109,22 +98,36 @@ export class PrismaChatRepository implements ChatRepository {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     return {
       systemPrompt: user?.systemPrompt ?? null,
-      ...this.additionalSettings,
+      defaultModelId: user?.defaultModelId ?? null,
+      defaultThinkingLevel: user?.defaultThinkingLevel ?? null,
+      enabledModelIds: user?.enabledModelIds ?? [],
+      enabledTools: user?.enabledTools ?? ['web_search', 'code_interpreter', 'memory'],
+      hideCostPerMessage: user?.hideCostPerMessage ?? false,
+      notifications: user?.notifications ?? true,
+      fontFamily: user?.fontFamily ?? 'Space Mono',
+      fontSize: user?.fontSize ?? 'medium',
     };
   }
 
   async updateSettings(userId: string, settings: Partial<SettingsRecord>): Promise<SettingsRecord> {
-    // Update systemPrompt in DB if provided
-    if (settings.systemPrompt !== undefined) {
+    // Build update data object with only defined fields
+    const updateData: Record<string, unknown> = {};
+    if (settings.systemPrompt !== undefined) updateData.systemPrompt = settings.systemPrompt;
+    if (settings.defaultModelId !== undefined) updateData.defaultModelId = settings.defaultModelId;
+    if (settings.defaultThinkingLevel !== undefined) updateData.defaultThinkingLevel = settings.defaultThinkingLevel;
+    if (settings.enabledModelIds !== undefined) updateData.enabledModelIds = settings.enabledModelIds;
+    if (settings.enabledTools !== undefined) updateData.enabledTools = settings.enabledTools;
+    if (settings.hideCostPerMessage !== undefined) updateData.hideCostPerMessage = settings.hideCostPerMessage;
+    if (settings.notifications !== undefined) updateData.notifications = settings.notifications;
+    if (settings.fontFamily !== undefined) updateData.fontFamily = settings.fontFamily;
+    if (settings.fontSize !== undefined) updateData.fontSize = settings.fontSize;
+
+    if (Object.keys(updateData).length > 0) {
       await this.prisma.user.update({
         where: { id: userId },
-        data: { systemPrompt: settings.systemPrompt },
+        data: updateData,
       });
     }
-
-    // Update additional settings in memory
-    const { systemPrompt: _sp, ...rest } = settings;
-    this.additionalSettings = { ...this.additionalSettings, ...rest };
 
     return this.getSettings(userId);
   }

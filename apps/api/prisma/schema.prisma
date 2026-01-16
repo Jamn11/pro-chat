@@ -34,17 +34,25 @@ enum StreamStatus {
 }
 
 model User {
-  id           String       @id @default(cuid())
-  clerkId      String       @unique
-  email        String?      @unique
-  firstName    String?
-  lastName     String?
-  imageUrl     String?
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-  lastSignInAt DateTime?
-  systemPrompt String?
-  threads      ChatThread[]
+  id                   String       @id @default(cuid())
+  clerkId              String       @unique
+  email                String?      @unique
+  firstName            String?
+  lastName             String?
+  imageUrl             String?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+  lastSignInAt         DateTime?
+  systemPrompt         String?
+  defaultModelId       String?
+  defaultThinkingLevel String?
+  enabledModelIds      String[]     @default([])
+  enabledTools         String[]     @default(["web_search", "code_interpreter", "memory"])
+  hideCostPerMessage   Boolean      @default(false)
+  notifications        Boolean      @default(true)
+  fontFamily           String       @default("Space Mono")
+  fontSize             String       @default("medium")
+  threads              ChatThread[]
 
   @@index([clerkId])
 }
