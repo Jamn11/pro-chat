@@ -81,6 +81,18 @@ export type StreamChatInput = {
   signal?: AbortSignal;
 };
 
+export type ChatInput = {
+  model: string;
+  messages: OpenRouterMessage[];
+  maxTokens?: number;
+  signal?: AbortSignal;
+};
+
+export type ChatResult = {
+  content: string;
+  usage?: OpenRouterUsage;
+};
+
 export class OpenRouterClient {
   private apiKey: string;
   private appUrl?: string;
@@ -90,6 +102,43 @@ export class OpenRouterClient {
     this.apiKey = options.apiKey;
     this.appUrl = options.appUrl;
     this.appName = options.appName;
+  }
+
+  async chat(input: ChatInput): Promise<ChatResult> {
+    const body: Record<string, unknown> = {
+      model: input.model,
+      messages: input.messages,
+      stream: false,
+    };
+
+    if (input.maxTokens) {
+      body.max_tokens = input.maxTokens;
+    }
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.apiKey}`,
+      'Content-Type': 'application/json',
+    };
+    if (this.appUrl) headers['HTTP-Referer'] = this.appUrl;
+    if (this.appName) headers['X-Title'] = this.appName;
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: input.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenRouter error ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content ?? '';
+    const usage: OpenRouterUsage | undefined = data.usage;
+
+    return { content, usage };
   }
 
   async streamChat(

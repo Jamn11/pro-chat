@@ -41,4 +41,12 @@ export const MODEL_SEED: ModelInfo[] = [
     supportsVision: true,
     supportsThinkingLevels: true,
   },
+  {
+    id: 'anthropic/claude-haiku-4.5',
+    label: 'Claude Haiku 4.5',
+    inputCostPerToken: 0.0000008,
+    outputCostPerToken: 0.000004,
+    supportsVision: true,
+    supportsThinkingLevels: false,
+  },
 ];

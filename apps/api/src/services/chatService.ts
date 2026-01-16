@@ -92,6 +92,34 @@ export class ChatService {
     }
   }
 
+  private async generateTitle(threadId: string, firstMessage: string): Promise<void> {
+    const TITLE_MODEL = 'anthropic/claude-haiku-4.5';
+    const prompt = `Generate a short, descriptive title (3-6 words) for a chat conversation that starts with this message. Return only the title, no quotes or punctuation at the end.
+
+User's first message:
+${firstMessage.slice(0, 500)}`;
+
+    try {
+      const result = await this.openRouter.chat({
+        model: TITLE_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        maxTokens: 30,
+      });
+
+      const title = result.content.trim().slice(0, 100);
+      if (title) {
+        await this.repo.updateThreadTitle(threadId, title);
+      }
+    } catch (error) {
+      // Fallback to simple truncation if LLM fails
+      const fallbackTitle = firstMessage.trim().slice(0, 60);
+      if (fallbackTitle) {
+        await this.repo.updateThreadTitle(threadId, fallbackTitle);
+      }
+      throw error;
+    }
+  }
+
   async sendMessageStream(
     input: SendMessageInput,
     onDelta: (chunk: string) => void,
@@ -124,10 +152,10 @@ export class ChatService {
       throw new Error('Thread not found');
     }
     if (!thread.title) {
-      const title = input.content.trim().slice(0, 60);
-      if (title) {
-        await this.repo.updateThreadTitle(input.threadId, title);
-      }
+      // Generate title asynchronously using LLM (don't await to not block message sending)
+      this.generateTitle(input.threadId, input.content).catch((err) => {
+        console.error('Failed to generate chat title:', err);
+      });
     }
 
     const userMessage = await this.repo.createMessage({
