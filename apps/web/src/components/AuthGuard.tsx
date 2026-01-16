@@ -10,19 +10,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
     <>
       <SignedOut>
         <div className="auth-container">
-          <div className="auth-card">
-            <h1 className="auth-title">Pro Chat</h1>
-            <p className="auth-subtitle">Sign in to continue</p>
-            <SignIn 
-              routing="hash" 
-              appearance={{
-                elements: {
-                  rootBox: 'auth-clerk-root',
-                  card: 'auth-clerk-card',
-                }
-              }}
-            />
-          </div>
+          <SignIn routing="hash" />
         </div>
       </SignedOut>
       <SignedIn>
