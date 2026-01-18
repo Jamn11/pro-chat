@@ -7,6 +7,7 @@ import {
   checkActiveStream,
   createThread,
   deleteThread,
+  fetchCredits,
   fetchMemory,
   fetchMessages,
   fetchModels,
@@ -22,12 +23,12 @@ import {
   uploadFiles,
 } from './api';
 import { AuthGuard, UserMenu } from './components/AuthGuard';
-import type { ActiveStreamInfo, Attachment, ModelInfo, Settings, ThreadSummary, UIMessage, UsageStats } from './types';
+import type { ActiveStreamInfo, Attachment, CreditsInfo, ModelInfo, Settings, ThreadSummary, UIMessage, UsageStats } from './types';
 import './App.css';
 
 type Theme = 'light' | 'dark';
 type ViewMode = 'chat' | 'settings';
-type SettingsTab = 'personalization' | 'instructions' | 'usage';
+type SettingsTab = 'personalization' | 'instructions' | 'usage' | 'credits';
 type ThinkingLevel = 'low' | 'medium' | 'high' | 'xhigh';
 type ThinkingSelection = ThinkingLevel | null;
 
@@ -184,6 +185,7 @@ export default function App() {
     fontSize: 'medium',
   });
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
+  const [credits, setCredits] = useState<CreditsInfo | null>(null);
   const [pendingSettings, setPendingSettings] = useState<Settings | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [theme, setTheme] = useState<Theme>(() => {
@@ -310,12 +312,13 @@ export default function App() {
     if (!isAuthLoaded) return;
 
     async function load() {
-      const [modelList, threadList, fetchedSettings, memory, usage] = await Promise.all([
+      const [modelList, threadList, fetchedSettings, memory, usage, creditsInfo] = await Promise.all([
         fetchModels(),
         fetchThreads(),
         fetchSettings(),
         fetchMemory().catch(() => ({ content: '' })),
         fetchUsageStats().catch(() => null),
+        fetchCredits().catch(() => ({ credits: 10.0 })),
       ]);
       setModels(modelList);
       setThreads(threadList);
@@ -336,6 +339,7 @@ export default function App() {
       setSystemPrompt(normalizedSettings.systemPrompt ?? '');
       setMemoryContent(memory.content ?? '');
       if (usage) setUsageStats(usage);
+      setCredits(creditsInfo);
 
       // Use default model from settings if available, otherwise first model
       if (modelList.length > 0) {
@@ -746,6 +750,10 @@ export default function App() {
             fetchMemory()
               .then((memory) => setMemoryContent(memory.content ?? ''))
               .catch(() => {});
+            // Refresh credits after message cost is deducted
+            fetchCredits()
+              .then((creditsInfo) => setCredits(creditsInfo))
+              .catch(() => {});
             // Show notification if enabled and page not focused
             if (document.hidden) {
               const preview = data.assistantMessage.content?.slice(0, 100) || 'Response ready';
@@ -943,6 +951,10 @@ export default function App() {
             setStreamingTraceMessageId(null);
             fetchMemory()
               .then((memory) => setMemoryContent(memory.content ?? ''))
+              .catch(() => {});
+            // Refresh credits after message cost is deducted
+            fetchCredits()
+              .then((creditsInfo) => setCredits(creditsInfo))
               .catch(() => {});
           },
           onError: (message) => {
@@ -1201,6 +1213,11 @@ export default function App() {
                 </div>
               </div>
               <div className="chat-meta">
+                {credits && (
+                  <span className={`credits-chip ${credits.credits < 1 ? 'low' : ''}`}>
+                    {credits.credits.toFixed(2)} credits
+                  </span>
+                )}
                 <span className="cost-chip">Chat total {formatCost(chatTotalCost)}</span>
                 {isStreaming && (
                   <span className="timer-chip">⏱ {(streamDuration / 1000).toFixed(1)}s</span>
@@ -1505,6 +1522,12 @@ export default function App() {
                 onClick={() => setSettingsTab('usage')}
               >
                 Usage
+              </button>
+              <button
+                className={`settings-tab ${settingsTab === 'credits' ? 'active' : ''}`}
+                onClick={() => setSettingsTab('credits')}
+              >
+                Credits
               </button>
             </div>
 
@@ -1998,6 +2021,76 @@ export default function App() {
                       )}
                     </div>
                   </div>
+                </>
+              )}
+
+              {settingsTab === 'credits' && (
+                <>
+                  {/* Credits Balance */}
+                  <div className="settings-card credits-balance-card">
+                    <div className="credits-balance">
+                      <div className="credits-amount">
+                        <span className="credits-value">
+                          {credits ? credits.credits.toFixed(2) : '—'}
+                        </span>
+                        <span className="credits-label">credits remaining</span>
+                      </div>
+                      <div className="credits-info">
+                        <p>1 credit = $1.00 USD</p>
+                        <p>Credits are deducted based on API usage costs.</p>
+                      </div>
+                    </div>
+                    {credits && credits.credits < 1 && (
+                      <div className="credits-warning">
+                        Your credit balance is low. You may run out of credits soon.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* How Credits Work */}
+                  <div className="settings-card">
+                    <h3>How Credits Work</h3>
+                    <div className="credits-explanation">
+                      <div className="credits-explanation-item">
+                        <span className="credits-explanation-icon">💬</span>
+                        <div>
+                          <strong>LLM Usage</strong>
+                          <p>Credits are deducted based on the tokens used in your conversations. Different models have different costs per token.</p>
+                        </div>
+                      </div>
+                      <div className="credits-explanation-item">
+                        <span className="credits-explanation-icon">🔍</span>
+                        <div>
+                          <strong>Web Search</strong>
+                          <p>Each web search costs $0.005 (0.5 cents) per request.</p>
+                        </div>
+                      </div>
+                      <div className="credits-explanation-item">
+                        <span className="credits-explanation-icon">🎁</span>
+                        <div>
+                          <strong>Starter Credits</strong>
+                          <p>All new accounts receive 10 free credits to get started.</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Usage Summary */}
+                  {usageStats && (
+                    <div className="settings-card">
+                      <h3>Credits Used</h3>
+                      <div className="credits-used-summary">
+                        <div className="credits-used-stat">
+                          <span className="credits-used-value">{formatCost(usageStats.totalCost)}</span>
+                          <span className="credits-used-label">Total Spent</span>
+                        </div>
+                        <div className="credits-used-stat">
+                          <span className="credits-used-value">{usageStats.totalMessages.toLocaleString()}</span>
+                          <span className="credits-used-label">Messages</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>

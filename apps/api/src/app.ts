@@ -144,6 +144,17 @@ export function createApp({
     }
   });
 
+  // Credits endpoints
+  app.get('/api/credits', async (req, res, next) => {
+    try {
+      const userId = getUserId(req);
+      const credits = await repo.getCredits(userId);
+      res.json(credits);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // Memory endpoints
   app.get('/api/memory', async (_req, res, next) => {
     try {

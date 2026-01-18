@@ -56,9 +56,14 @@ export type UserRecord = {
   lastName: string | null;
   imageUrl: string | null;
   systemPrompt: string | null;
+  credits: number;
   createdAt: Date;
   updatedAt: Date;
   lastSignInAt: Date | null;
+};
+
+export type CreditsInfo = {
+  credits: number;
 };
 
 export type UpsertUserFromClerkInput = {
@@ -121,6 +126,10 @@ export interface ChatRepository {
   // Settings (per-user)
   getSettings(userId: string): Promise<SettingsRecord>;
   updateSettings(userId: string, settings: Partial<SettingsRecord>): Promise<SettingsRecord>;
+
+  // Credits (per-user)
+  getCredits(userId: string): Promise<CreditsInfo>;
+  deductCredits(userId: string, amount: number): Promise<CreditsInfo>;
 
   // Usage stats (per-user)
   getUsageStats(userId: string): Promise<UsageStats>;

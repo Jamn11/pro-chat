@@ -282,6 +282,7 @@ ${firstMessage.slice(0, 500)}`;
     let finalContent = '';
     let accumulatedContent = '';
     let iterations = 0;
+    let searchCallCount = 0; // Track search API calls for cost calculation
 
     const handleReasoning = (delta: string) => {
       if (delta) {
@@ -295,6 +296,10 @@ ${firstMessage.slice(0, 500)}`;
     };
 
     const handleToolStart = (toolName: string) => {
+      // Track search API calls for cost calculation
+      if (toolName === SEARCH_TOOL_NAME) {
+        searchCallCount += 1;
+      }
       trace = appendTraceEvent(
         trace,
         createTraceEvent('tool', `Tool: ${toolName}`),
@@ -380,7 +385,14 @@ ${firstMessage.slice(0, 500)}`;
     }
 
     const durationMs = Date.now() - start;
-    const cost = calculateCost(promptTokens, completionTokens, model);
+    // Calculate LLM cost + search API cost (0.5 cents = $0.005 per search)
+    const SEARCH_COST_PER_REQUEST = 0.005;
+    const llmCost = calculateCost(promptTokens, completionTokens, model);
+    const searchCost = searchCallCount * SEARCH_COST_PER_REQUEST;
+    const cost = llmCost + searchCost;
+
+    // Deduct credits from user (cost is in dollars, credits are 1:1 with dollars)
+    await this.repo.deductCredits(input.userId, cost);
 
     let assistantMessage: MessageRecord;
 
@@ -534,6 +546,7 @@ ${firstMessage.slice(0, 500)}`;
     let sources: MessageSource[] = [];
     let finalContent = '';
     let iterations = 0;
+    let searchCallCount = 0; // Track search API calls for cost calculation
 
     const handleReasoning = (delta: string) => {
       if (delta) {
@@ -547,6 +560,10 @@ ${firstMessage.slice(0, 500)}`;
     };
 
     const handleToolStart = (toolName: string) => {
+      // Track search API calls for cost calculation
+      if (toolName === SEARCH_TOOL_NAME) {
+        searchCallCount += 1;
+      }
       trace = appendTraceEvent(
         trace,
         createTraceEvent('tool', `Tool: ${toolName}`),
@@ -627,7 +644,14 @@ ${firstMessage.slice(0, 500)}`;
     }
 
     const durationMs = Date.now() - start;
-    const cost = calculateCost(promptTokens, completionTokens, model);
+    // Calculate LLM cost + search API cost (0.5 cents = $0.005 per search)
+    const SEARCH_COST_PER_REQUEST = 0.005;
+    const llmCost = calculateCost(promptTokens, completionTokens, model);
+    const searchCost = searchCallCount * SEARCH_COST_PER_REQUEST;
+    const cost = llmCost + searchCost;
+
+    // Deduct credits from user (cost is in dollars, credits are 1:1 with dollars)
+    await this.repo.deductCredits(userId, cost);
 
     // Update the assistant message with combined content
     let assistantMessage: MessageRecord;

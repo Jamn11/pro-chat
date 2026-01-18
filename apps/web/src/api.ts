@@ -1,5 +1,6 @@
 import type {
   CheckActiveStreamResponse,
+  CreditsInfo,
   Memory,
   MemoryExtractionResult,
   Message,
@@ -98,6 +99,11 @@ export async function updateSettings(settings: Partial<Settings>): Promise<Setti
 export async function fetchUsageStats(): Promise<UsageStats> {
   const res = await authFetch('/api/usage');
   return handleJson<UsageStats>(res);
+}
+
+export async function fetchCredits(): Promise<CreditsInfo> {
+  const res = await authFetch('/api/credits');
+  return handleJson<CreditsInfo>(res);
 }
 
 export async function fetchMemory(): Promise<Memory> {

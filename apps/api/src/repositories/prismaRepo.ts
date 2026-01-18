@@ -16,6 +16,7 @@ import {
   CreateMessageInput,
   CreateThreadInput,
   CreateUsageRecordInput,
+  CreditsInfo,
   SettingsRecord,
   UserRecord,
   UpsertUserFromClerkInput,
@@ -75,6 +76,7 @@ export class PrismaChatRepository implements ChatRepository {
     lastName: string | null;
     imageUrl: string | null;
     systemPrompt: string | null;
+    credits: number;
     createdAt: Date;
     updatedAt: Date;
     lastSignInAt: Date | null;
@@ -87,6 +89,7 @@ export class PrismaChatRepository implements ChatRepository {
       lastName: user.lastName,
       imageUrl: user.imageUrl,
       systemPrompt: user.systemPrompt,
+      credits: user.credits,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
       lastSignInAt: user.lastSignInAt,
@@ -130,6 +133,24 @@ export class PrismaChatRepository implements ChatRepository {
     }
 
     return this.getSettings(userId);
+  }
+
+  // Credits methods
+  async getCredits(userId: string): Promise<CreditsInfo> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    return {
+      credits: user?.credits ?? 10.0,
+    };
+  }
+
+  async deductCredits(userId: string, amount: number): Promise<CreditsInfo> {
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: { credits: { decrement: amount } },
+    });
+    return {
+      credits: user.credits,
+    };
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars

@@ -52,6 +52,7 @@ model User {
   notifications        Boolean      @default(true)
   fontFamily           String       @default("Space Mono")
   fontSize             String       @default("medium")
+  credits              Float        @default(10.0)
   threads              ChatThread[]
 
   @@index([clerkId])

@@ -81,6 +81,10 @@ export type Memory = {
   content: string;
 };
 
+export type CreditsInfo = {
+  credits: number;
+};
+
 export type MemoryExtractionResult = {
   processed: number;
   memoriesAdded: number;

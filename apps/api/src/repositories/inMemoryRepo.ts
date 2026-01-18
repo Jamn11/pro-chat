@@ -17,6 +17,7 @@ import {
   CreateMessageInput,
   CreateThreadInput,
   CreateUsageRecordInput,
+  CreditsInfo,
   SettingsRecord,
   UserRecord,
   UpsertUserFromClerkInput,
@@ -96,6 +97,7 @@ export class InMemoryChatRepository implements ChatRepository {
       lastName: input.lastName ?? null,
       imageUrl: input.imageUrl ?? null,
       systemPrompt: null,
+      credits: 10.0,
       createdAt: new Date(),
       updatedAt: new Date(),
       lastSignInAt: new Date(),
@@ -126,6 +128,25 @@ export class InMemoryChatRepository implements ChatRepository {
     const { systemPrompt: _sp, ...rest } = settings;
     this.additionalSettings = { ...this.additionalSettings, ...rest };
     return this.getSettings(userId);
+  }
+
+  // Credits methods
+  async getCredits(userId: string): Promise<CreditsInfo> {
+    const user = this.users.get(userId);
+    return {
+      credits: user?.credits ?? 10.0,
+    };
+  }
+
+  async deductCredits(userId: string, amount: number): Promise<CreditsInfo> {
+    const user = this.users.get(userId);
+    if (user) {
+      user.credits -= amount;
+      this.users.set(userId, user);
+    }
+    return {
+      credits: user?.credits ?? 10.0,
+    };
   }
 
   // Usage stats (per-user)
