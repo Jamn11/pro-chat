@@ -209,6 +209,7 @@ export default function App() {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesContainerRef = useRef<HTMLElement | null>(null);
   const shouldAutoScrollRef = useRef(true);
+  const isAutoScrollingRef = useRef(false);
   const streamTimerRef = useRef<number | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const dragCounterRef = useRef(0);
@@ -404,24 +405,34 @@ export default function App() {
     if (!container) return;
 
     const handleScroll = () => {
+      // Ignore scroll events triggered by our own auto-scroll
+      if (isAutoScrollingRef.current) return;
+
       const { scrollTop, scrollHeight, clientHeight } = container;
-      // Consider "at bottom" if within 100px of bottom
-      const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
+      // Consider "at bottom" if within 150px of bottom
+      const isAtBottom = scrollHeight - scrollTop - clientHeight < 150;
       shouldAutoScrollRef.current = isAtBottom;
     };
 
-    container.addEventListener('scroll', handleScroll);
+    container.addEventListener('scroll', handleScroll, { passive: true });
     return () => container.removeEventListener('scroll', handleScroll);
-  }, []);
+  }, [activeThreadId]); // Re-attach when thread changes
 
   // Auto-scroll to bottom only when user hasn't scrolled up
   useEffect(() => {
-    if (
-      shouldAutoScrollRef.current &&
-      messagesEndRef.current &&
-      typeof messagesEndRef.current.scrollIntoView === 'function'
-    ) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 150;
+
+    // Only auto-scroll if user is at/near bottom
+    if (shouldAutoScrollRef.current && isAtBottom) {
+      isAutoScrollingRef.current = true;
+      container.scrollTop = scrollHeight - clientHeight;
+      requestAnimationFrame(() => {
+        isAutoScrollingRef.current = false;
+      });
     }
   }, [messages]);
 
