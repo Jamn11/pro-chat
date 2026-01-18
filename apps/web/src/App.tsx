@@ -205,6 +205,8 @@ export default function App() {
   const [isResuming, setIsResuming] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const messagesContainerRef = useRef<HTMLElement | null>(null);
+  const shouldAutoScrollRef = useRef(true);
   const streamTimerRef = useRef<number | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const dragCounterRef = useRef(0);
@@ -362,6 +364,7 @@ export default function App() {
   useEffect(() => {
     setAttachments([]);
     setPendingStream(null);
+    shouldAutoScrollRef.current = true; // Reset auto-scroll when switching threads
     if (!activeThreadId) {
       setMessages([]);
       return;
@@ -391,8 +394,29 @@ export default function App() {
       });
   }, [activeThreadId]);
 
+  // Track user scroll position to determine if we should auto-scroll
   useEffect(() => {
-    if (messagesEndRef.current && typeof messagesEndRef.current.scrollIntoView === 'function') {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      // Consider "at bottom" if within 100px of bottom
+      const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
+      shouldAutoScrollRef.current = isAtBottom;
+    };
+
+    container.addEventListener('scroll', handleScroll);
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  // Auto-scroll to bottom only when user hasn't scrolled up
+  useEffect(() => {
+    if (
+      shouldAutoScrollRef.current &&
+      messagesEndRef.current &&
+      typeof messagesEndRef.current.scrollIntoView === 'function'
+    ) {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [messages]);
@@ -542,6 +566,9 @@ export default function App() {
       content = 'Please review the attached file(s).';
     }
     if (!content) return;
+
+    // Re-enable auto-scroll when user sends a message
+    shouldAutoScrollRef.current = true;
 
     let threadId = activeThreadIdRef.current;
     if (!threadId) {
@@ -1181,7 +1208,7 @@ export default function App() {
               </div>
             </header>
 
-            <section className="messages">
+            <section className="messages" ref={messagesContainerRef}>
               {pendingStream && !isResuming && (
                 <div className="resume-banner">
                   <div className="resume-banner-content">
