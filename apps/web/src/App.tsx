@@ -750,9 +750,12 @@ export default function App() {
             fetchMemory()
               .then((memory) => setMemoryContent(memory.content ?? ''))
               .catch(() => {});
-            // Refresh credits after message cost is deducted
+            // Refresh credits and usage stats after message cost is deducted
             fetchCredits()
               .then((creditsInfo) => setCredits(creditsInfo))
+              .catch(() => {});
+            fetchUsageStats()
+              .then((stats) => setUsageStats(stats))
               .catch(() => {});
             // Show notification if enabled and page not focused
             if (document.hidden) {
@@ -952,9 +955,12 @@ export default function App() {
             fetchMemory()
               .then((memory) => setMemoryContent(memory.content ?? ''))
               .catch(() => {});
-            // Refresh credits after message cost is deducted
+            // Refresh credits and usage stats after message cost is deducted
             fetchCredits()
               .then((creditsInfo) => setCredits(creditsInfo))
+              .catch(() => {});
+            fetchUsageStats()
+              .then((stats) => setUsageStats(stats))
               .catch(() => {});
           },
           onError: (message) => {
