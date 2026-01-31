@@ -237,6 +237,11 @@ export default function App() {
   const activeThread = threads.find((thread) => thread.id === activeThreadId) || null;
   const selectedModel = models.find((model) => model.id === selectedModelId) || null;
 
+  // Effective settings: use pending if available, otherwise saved
+  const effectiveSettings = pendingSettings ?? settings;
+  const settingsDirty = pendingSettings !== null;
+  const modelsAllDisabled = effectiveSettings.enabledModelIds.includes(DISABLE_ALL_MODELS_ID);
+
   const filteredSettingsModels = useMemo(() => {
     const query = settingsModelQuery.trim().toLowerCase();
     if (!query) return models;
@@ -246,6 +251,12 @@ export default function App() {
       return label.includes(query) || id.includes(query);
     });
   }, [models, settingsModelQuery]);
+  const availableModels = useMemo(() => {
+    if (modelsAllDisabled) return [];
+    const enabledIds = effectiveSettings.enabledModelIds;
+    if (enabledIds.length === 0) return models;
+    return models.filter((model) => enabledIds.includes(model.id));
+  }, [models, modelsAllDisabled, effectiveSettings.enabledModelIds]);
   const thinkingOptions = useMemo(() => getThinkingOptions(selectedModel), [selectedModel]);
   const slashCommand = useMemo<SlashCommand | null>(() => {
     const trimmed = composer.trimStart();
@@ -261,7 +272,7 @@ export default function App() {
   const modelSuggestions = useMemo(() => {
     if (!modelQuery) return [];
     const query = normalizeModelText(modelQuery.trim());
-    const ranked = models
+    const ranked = availableModels
       .map((model) => {
         const labelKey = normalizeModelText(model.label);
         const idKey = normalizeModelText(model.id);
@@ -277,7 +288,7 @@ export default function App() {
       .filter((entry) => query === '' || entry.score < 2)
       .sort((a, b) => a.score - b.score || a.model.label.localeCompare(b.model.label));
     return ranked.map((entry) => entry.model).slice(0, 6);
-  }, [models, modelQuery]);
+  }, [availableModels, modelQuery]);
   const thinkingSuggestions = useMemo(() => {
     if (!slashCommand || !isThinkingCommand) return [];
     const query = normalizeModelText(slashCommand.args.trim());
@@ -290,10 +301,20 @@ export default function App() {
   }, [slashCommand, isThinkingCommand, thinkingOptions]);
   const slashCommandActive = slashCommand !== null;
 
-  // Effective settings: use pending if available, otherwise saved
-  const effectiveSettings = pendingSettings ?? settings;
-  const settingsDirty = pendingSettings !== null;
-  const modelsAllDisabled = effectiveSettings.enabledModelIds.includes(DISABLE_ALL_MODELS_ID);
+  useEffect(() => {
+    if (availableModels.length === 0) {
+      if (selectedModelId !== '') setSelectedModelId('');
+      return;
+    }
+    if (!availableModels.some((model) => model.id === selectedModelId)) {
+      const defaultId = effectiveSettings.defaultModelId;
+      if (defaultId && availableModels.some((model) => model.id === defaultId)) {
+        setSelectedModelId(defaultId);
+      } else {
+        setSelectedModelId(availableModels[0].id);
+      }
+    }
+  }, [availableModels, effectiveSettings.defaultModelId, selectedModelId]);
 
   // Apply font settings via CSS variables
   useEffect(() => {
@@ -480,10 +501,12 @@ export default function App() {
 
     // Reset to default model from settings
     const defaultModelId = settings.defaultModelId;
-    if (defaultModelId && models.some(m => m.id === defaultModelId)) {
+    if (defaultModelId && availableModels.some(m => m.id === defaultModelId)) {
       setSelectedModelId(defaultModelId);
-    } else if (models.length > 0) {
-      setSelectedModelId(models[0].id);
+    } else if (availableModels.length > 0) {
+      setSelectedModelId(availableModels[0].id);
+    } else {
+      setSelectedModelId('');
     }
 
     // Reset to default thinking level from settings
@@ -492,7 +515,7 @@ export default function App() {
     } else {
       setThinkingLevel('medium');
     }
-  }, [settings.defaultModelId, settings.defaultThinkingLevel, models]);
+  }, [settings.defaultModelId, settings.defaultThinkingLevel, availableModels]);
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
@@ -592,6 +615,10 @@ export default function App() {
       if (isUploading) {
         setErrorMessage('Please wait for file uploads to finish before sending.');
       }
+      return;
+    }
+    if (!selectedModelId) {
+      setErrorMessage('Please enable at least one model in Settings.');
       return;
     }
     let content = composer.trim();
@@ -1426,12 +1453,17 @@ export default function App() {
                   aria-label="Model selector"
                   value={selectedModelId}
                   onChange={(event) => setSelectedModelId(event.target.value)}
+                  disabled={availableModels.length === 0}
                 >
-                  {models.map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.label}
-                    </option>
-                  ))}
+                  {availableModels.length === 0 ? (
+                    <option value="">No models enabled</option>
+                  ) : (
+                    availableModels.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.label}
+                      </option>
+                    ))
+                  )}
                 </select>
                 <select
                   aria-label="Thinking selector"
@@ -1456,7 +1488,7 @@ export default function App() {
                   <button
                     className="button primary"
                     onClick={handleSend}
-                    disabled={isUploading}
+                    disabled={isUploading || !selectedModelId}
                   >
                     {isUploading ? 'Uploading…' : 'Send'}
                   </button>
