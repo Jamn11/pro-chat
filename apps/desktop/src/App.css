@@ -1,12 +1,15 @@
 .app {
   display: grid;
   grid-template-columns: 280px 1fr;
-  min-height: 100vh;
-  height: 100vh;
+  min-height: calc(100vh / var(--ui-scale));
+  height: calc(100vh / var(--ui-scale));
   gap: 0;
   overflow: hidden;
   position: relative;
   transition: grid-template-columns 0.2s ease;
+  transform: scale(var(--ui-scale));
+  transform-origin: top left;
+  width: calc(100% / var(--ui-scale));
 }
 
 .app.sidebar-collapsed {

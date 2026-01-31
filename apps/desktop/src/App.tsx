@@ -106,6 +106,12 @@ const getThinkingOptions = (model: ModelInfo | null): ThinkingOption[] => {
 
 const normalizeModelText = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
 const DISABLE_ALL_MODELS_ID = '__none__';
+const ZOOM_STORAGE_KEY = 'pro-chat-ui-scale';
+const ZOOM_STEP = 0.1;
+const ZOOM_MIN = 0.8;
+const ZOOM_MAX = 1.3;
+const clampZoom = (value: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value));
+const roundZoom = (value: number) => Math.round(value / ZOOM_STEP) * ZOOM_STEP;
 
 const formatCost = (value: number | null | undefined) => {
   const amount = value ?? 0;
@@ -208,6 +214,14 @@ export default function App() {
     const storage = window.localStorage;
     if (!storage || typeof storage.getItem !== 'function') return 'dark';
     return (storage.getItem('pro-chat-theme') as Theme) || 'dark';
+  });
+  const [uiScale, setUiScale] = useState(() => {
+    if (typeof window === 'undefined') return 1;
+    const storage = window.localStorage;
+    if (!storage || typeof storage.getItem !== 'function') return 1;
+    const stored = Number(storage.getItem(ZOOM_STORAGE_KEY));
+    if (!Number.isFinite(stored) || stored <= 0) return 1;
+    return clampZoom(roundZoom(stored));
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -345,6 +359,17 @@ export default function App() {
       window.localStorage.setItem('pro-chat-theme', theme);
     }
   }, [theme]);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--ui-scale', `${uiScale}`);
+    if (
+      typeof window !== 'undefined' &&
+      window.localStorage &&
+      typeof window.localStorage.setItem === 'function'
+    ) {
+      window.localStorage.setItem(ZOOM_STORAGE_KEY, uiScale.toString());
+    }
+  }, [uiScale]);
 
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId;
@@ -527,6 +552,24 @@ export default function App() {
     window.addEventListener('keydown', handleShortcut);
     return () => window.removeEventListener('keydown', handleShortcut);
   }, [handleNewThread]);
+
+  useEffect(() => {
+    const handleZoomKeys = (event: KeyboardEvent) => {
+      if (!event.metaKey) return;
+      if (event.key === '=' || event.key === '+') {
+        event.preventDefault();
+        setUiScale((prev) => clampZoom(roundZoom(prev + ZOOM_STEP)));
+      } else if (event.key === '-') {
+        event.preventDefault();
+        setUiScale((prev) => clampZoom(roundZoom(prev - ZOOM_STEP)));
+      } else if (event.key === '0') {
+        event.preventDefault();
+        setUiScale(1);
+      }
+    };
+    window.addEventListener('keydown', handleZoomKeys);
+    return () => window.removeEventListener('keydown', handleZoomKeys);
+  }, []);
 
   const handleDeleteThread = async (threadId: string) => {
     await deleteThread(threadId);
