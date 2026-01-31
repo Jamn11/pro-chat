@@ -105,6 +105,7 @@ const getThinkingOptions = (model: ModelInfo | null): ThinkingOption[] => {
 };
 
 const normalizeModelText = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+const DISABLE_ALL_MODELS_ID = '__none__';
 
 const formatCost = (value: number | null | undefined) => {
   const amount = value ?? 0;
@@ -292,6 +293,7 @@ export default function App() {
   // Effective settings: use pending if available, otherwise saved
   const effectiveSettings = pendingSettings ?? settings;
   const settingsDirty = pendingSettings !== null;
+  const modelsAllDisabled = effectiveSettings.enabledModelIds.includes(DISABLE_ALL_MODELS_ID);
 
   // Apply font settings via CSS variables
   useEffect(() => {
@@ -1685,6 +1687,14 @@ export default function App() {
                         >
                           Enable All
                         </button>
+                        <button
+                          className="button ghost"
+                          onClick={() =>
+                            handleSettingsChange({ enabledModelIds: [DISABLE_ALL_MODELS_ID] })
+                          }
+                        >
+                          Disable All
+                        </button>
                         {settingsModelQuery.trim() && (
                           <button
                             className="button ghost"
@@ -1712,7 +1722,10 @@ export default function App() {
                     </div>
                     <div className="settings-model-list">
                       {filteredSettingsModels.map((model) => {
-                        const isEnabled = effectiveSettings.enabledModelIds.length === 0 || effectiveSettings.enabledModelIds.includes(model.id);
+                        const isEnabled =
+                          !modelsAllDisabled &&
+                          (effectiveSettings.enabledModelIds.length === 0 ||
+                            effectiveSettings.enabledModelIds.includes(model.id));
                         return (
                           <label key={model.id} className="settings-checkbox">
                             <input
@@ -1720,12 +1733,19 @@ export default function App() {
                               checked={isEnabled}
                               onChange={(e) => {
                                 let newIds: string[];
-                                if (effectiveSettings.enabledModelIds.length === 0) {
+                                if (modelsAllDisabled) {
+                                  newIds = e.target.checked
+                                    ? [model.id]
+                                    : [DISABLE_ALL_MODELS_ID];
+                                } else if (effectiveSettings.enabledModelIds.length === 0) {
                                   newIds = models.filter(m => m.id !== model.id).map(m => m.id);
                                 } else if (e.target.checked) {
                                   newIds = [...effectiveSettings.enabledModelIds, model.id];
                                 } else {
                                   newIds = effectiveSettings.enabledModelIds.filter(id => id !== model.id);
+                                  if (newIds.length === 0) {
+                                    newIds = [DISABLE_ALL_MODELS_ID];
+                                  }
                                 }
                                 handleSettingsChange({ enabledModelIds: newIds });
                               }}
