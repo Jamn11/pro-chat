@@ -1,9 +1,9 @@
 .PHONY: app dev
 
-APP_PATH := apps/web/src-tauri/target/release/bundle/macos/pro-chat.app
+APP_PATH := apps/desktop/src-tauri/target/release/bundle/macos/pro-chat.app
 
 app:
-	npm run tauri:build -w apps/web
+	npm run tauri:build -w apps/desktop
 	@if [ -d "$(APP_PATH)" ]; then \
 		open "$(APP_PATH)"; \
 	else \
@@ -12,4 +12,4 @@ app:
 	fi
 
 dev:
-	npm run tauri:dev -w apps/web
+	npm run tauri:dev -w apps/desktop

@@ -109,7 +109,7 @@ pro-chat/
 
 ### 1.2 Extract types from web app
 
-Move these types from `apps/web/src/types.ts` to `packages/shared/src/types.ts`:
+Move these types from `apps/desktop/src/types.ts` to `packages/shared/src/types.ts`:
 
 - `Thread`
 - `Message`
@@ -120,7 +120,7 @@ Move these types from `apps/web/src/types.ts` to `packages/shared/src/types.ts`:
 
 ### 1.3 Update web app imports
 
-Change imports in `apps/web/src/` from:
+Change imports in `apps/desktop/src/` from:
 ```typescript
 import { Thread, Message } from './types'
 ```
@@ -206,7 +206,7 @@ Add the new workspaces:
 
 ### 3.1 Create apps/mobile/src/services/api.ts
 
-Port the API client from `apps/web/src/api.ts` with these modifications:
+Port the API client from `apps/desktop/src/api.ts` with these modifications:
 
 1. **Base URL configuration:**
 ```typescript

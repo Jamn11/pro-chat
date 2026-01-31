@@ -1,6 +1,14 @@
 # pro-chat
 
-Minimal, full‑featured LLM chat MVP with multi‑model routing via OpenRouter.
+A desktop‑only, local‑first chat client for OpenRouter models. Built with Tauri for macOS, it keeps your data on disk, supports bring‑your‑own keys, and makes switching between dozens of models fast and delightful.
+
+## Why it’s different
+
+- **Desktop‑only**: no hosted web UI, no server to run in production.
+- **Local‑first**: SQLite + file storage on your machine.
+- **Multi‑model by default**: OpenAI, Claude, Gemini, Kimi, GLM, and more.
+- **Power‑user friendly**: model search, slash commands, attachments, and memory.
+- **Transparent costs**: per‑message usage & spend tracking.
 
 ## Quick start
 
@@ -51,22 +59,16 @@ npm run prisma:generate -w apps/api
 npm run prisma:migrate -w apps/api
 ```
 
-4. Start dev servers:
+4. Run the desktop app in dev:
 
 ```bash
-npm run dev
-```
-
-## Desktop (Tauri)
-
-```bash
-npm run tauri:dev -w apps/web
+make dev
 ```
 
 Build:
 
 ```bash
-npm run tauri:build -w apps/web
+make app
 ```
 
 ## Tests and lint
@@ -78,6 +80,7 @@ npm test
 ```
 
 ## Notes
+- This repo targets macOS desktop only. The UI is rendered in a Tauri webview and is not shipped as a standalone web app.
 - SQLite database is stored at `apps/api/prisma/data/pro-chat.db` in dev when using the default `.env`. In the packaged desktop app it lives in the app data directory (macOS: `~/Library/Application Support/com.prochat.desktop/pro-chat.db`).
 - File uploads stored on local disk at `apps/api/storage` by default (desktop uses its app data directory).
 - Model list is seeded on API boot.

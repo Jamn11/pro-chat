@@ -10,7 +10,7 @@ apps/*/build
 apps/*/data
 apps/*/storage
 apps/api/prisma/data
-apps/web/src-tauri/bin
-apps/web/src-tauri/target
+apps/desktop/src-tauri/bin
+apps/desktop/src-tauri/target
 coverage
 .worktrees

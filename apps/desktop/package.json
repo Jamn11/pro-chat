@@ -1,12 +1,11 @@
 {
-  "name": "pro-chat-web",
+  "name": "pro-chat-desktop-ui",
   "private": true,
   "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "node ../../node_modules/vite/bin/vite.js",
     "build": "node ../../node_modules/typescript/lib/tsc.js -b && node ../../node_modules/vite/bin/vite.js build",
-    "preview": "node ../../node_modules/vite/bin/vite.js preview",
     "lint": "eslint src --ext .ts,.tsx",
     "test": "vitest run",
     "tauri": "tauri",

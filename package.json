@@ -6,9 +6,9 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "node ./node_modules/concurrently/dist/bin/concurrently.js -k \"npm --prefix apps/api run dev\" \"npm run dev:web\"",
-    "dev:web": "node ./node_modules/wait-on/bin/wait-on http://localhost:8787/api/health && npm --prefix apps/web run dev",
-    "build": "npm run build -w apps/api && npm run build -w apps/web",
+    "dev": "node ./node_modules/concurrently/dist/bin/concurrently.js -k \"npm --prefix apps/api run dev\" \"npm run dev:ui\"",
+    "dev:ui": "node ./node_modules/wait-on/bin/wait-on http://localhost:8787/api/health && npm --prefix apps/desktop run dev",
+    "build": "npm run build -w apps/api && npm run build -w apps/desktop",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "node node_modules/typescript/lib/tsc.js -b",
     "test": "node node_modules/vitest/vitest.mjs run",

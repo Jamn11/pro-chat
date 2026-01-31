@@ -43,7 +43,7 @@ Note: Model IDs will be verified at implementation time.
 
 ## Architecture (High-Level)
 - Monorepo:
-  - apps/web (Vite + React)
+  - apps/desktop (Vite + React)
   - apps/api (Express + TS)
 - API server handles:
   - Auth-free access (private deployment only)

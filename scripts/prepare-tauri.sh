@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN_DIR="$ROOT_DIR/apps/web/src-tauri/bin"
+BIN_DIR="$ROOT_DIR/apps/desktop/src-tauri/bin"
 mkdir -p "$BIN_DIR"
 
 NODE_PATH="$(command -v node || true)"
