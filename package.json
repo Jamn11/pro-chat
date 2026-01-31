@@ -6,13 +6,13 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -k \"npm:dev -w apps/api\" \"npm:dev:web\"",
-    "dev:web": "wait-on http://localhost:8787/api/health && npm run dev -w apps/web",
+    "dev": "node ./node_modules/concurrently/dist/bin/concurrently.js -k \"npm --prefix apps/api run dev\" \"npm run dev:web\"",
+    "dev:web": "node ./node_modules/wait-on/bin/wait-on http://localhost:8787/api/health && npm --prefix apps/web run dev",
     "build": "npm run build -w apps/api && npm run build -w apps/web",
     "lint": "eslint . --ext .ts,.tsx",
-    "typecheck": "tsc -b",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "typecheck": "node node_modules/typescript/lib/tsc.js -b",
+    "test": "node node_modules/vitest/vitest.mjs run",
+    "test:watch": "node node_modules/vitest/vitest.mjs",
     "format": "prettier -w ."
   },
   "devDependencies": {

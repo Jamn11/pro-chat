@@ -17,10 +17,8 @@ import {
   CreateMessageInput,
   CreateThreadInput,
   CreateUsageRecordInput,
-  CreditsInfo,
   SettingsRecord,
   UserRecord,
-  UpsertUserFromClerkInput,
   UpdateActiveStreamInput,
   UsageRecord,
   UsageStats,
@@ -47,14 +45,16 @@ type InternalActiveStream = {
 
 export class InMemoryChatRepository implements ChatRepository {
   private users = new Map<string, InternalUser>();
+  private usersByKey = new Map<string, string>();
   // Store additional settings in memory (systemPrompt goes to user record)
   private additionalSettings: Omit<SettingsRecord, 'systemPrompt'> = {
+    openRouterApiKey: null,
+    braveSearchApiKey: null,
     defaultModelId: null,
     defaultThinkingLevel: null,
     enabledModelIds: [],
     enabledTools: ['web_search', 'code_interpreter', 'memory'],
     hideCostPerMessage: false,
-    notifications: true,
     fontFamily: 'Space Mono',
     fontSize: 'medium',
   };
@@ -66,43 +66,36 @@ export class InMemoryChatRepository implements ChatRepository {
   // Store usage records in memory (persists across chat deletions within session)
   private usageRecords: UsageRecord[] = [];
 
-  // User management (Clerk integration)
-  async findUserByClerkId(clerkId: string): Promise<UserRecord | null> {
-    for (const user of this.users.values()) {
-      if (user.clerkId === clerkId) return user;
+  // User management (local desktop)
+  async getOrCreateLocalUser(localUserKey: string): Promise<UserRecord> {
+    const existingId = this.usersByKey.get(localUserKey);
+    if (existingId) {
+      const existing = this.users.get(existingId);
+      if (existing) return existing;
+      this.usersByKey.delete(localUserKey);
     }
-    return null;
-  }
 
-  async upsertUserFromClerk(input: UpsertUserFromClerkInput): Promise<UserRecord> {
-    const existing = await this.findUserByClerkId(input.clerkId);
-    if (existing) {
-      const updated: InternalUser = {
-        ...existing,
-        email: input.email ?? existing.email,
-        firstName: input.firstName ?? existing.firstName,
-        lastName: input.lastName ?? existing.lastName,
-        imageUrl: input.imageUrl ?? existing.imageUrl,
-        updatedAt: new Date(),
-        lastSignInAt: new Date(),
-      };
-      this.users.set(updated.id, updated);
-      return updated;
+    if (this.users.size > 0) {
+      const [first] = this.users.values();
+      if (first) {
+        this.usersByKey.set(localUserKey, first.id);
+        return first;
+      }
     }
+
     const newUser: InternalUser = {
       id: randomUUID(),
-      clerkId: input.clerkId,
-      email: input.email ?? null,
-      firstName: input.firstName ?? null,
-      lastName: input.lastName ?? null,
-      imageUrl: input.imageUrl ?? null,
+      email: null,
+      firstName: null,
+      lastName: null,
+      imageUrl: null,
       systemPrompt: null,
-      credits: 10.0,
       createdAt: new Date(),
       updatedAt: new Date(),
       lastSignInAt: new Date(),
     };
     this.users.set(newUser.id, newUser);
+    this.usersByKey.set(localUserKey, newUser.id);
     return newUser;
   }
 
@@ -128,25 +121,6 @@ export class InMemoryChatRepository implements ChatRepository {
     const { systemPrompt: _sp, ...rest } = settings;
     this.additionalSettings = { ...this.additionalSettings, ...rest };
     return this.getSettings(userId);
-  }
-
-  // Credits methods
-  async getCredits(userId: string): Promise<CreditsInfo> {
-    const user = this.users.get(userId);
-    return {
-      credits: user?.credits ?? 10.0,
-    };
-  }
-
-  async deductCredits(userId: string, amount: number): Promise<CreditsInfo> {
-    const user = this.users.get(userId);
-    if (user) {
-      user.credits -= amount;
-      this.users.set(userId, user);
-    }
-    return {
-      credits: user?.credits ?? 10.0,
-    };
   }
 
   // Usage stats (per-user)

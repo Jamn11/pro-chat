@@ -10,12 +10,10 @@ const CLAUDE_THINKING_BUDGETS: Record<'low' | 'medium' | 'high' | 'xhigh', numbe
   xhigh: 65536,
 };
 
-const MODEL_THINKING_MODES: Record<string, ThinkingMode> = {
-  'openai/gpt-5.2': 'effort',
-  'x-ai/grok-4.1-fast': 'effort',
-  'anthropic/claude-opus-4.5': 'budget',
-  'anthropic/claude-sonnet-4.5': 'budget',
-  'google/gemini-3-pro-preview': 'none',
+const getThinkingMode = (model: { id: string; supportsThinkingLevels: boolean }): ThinkingMode => {
+  if (!model.supportsThinkingLevels) return 'none';
+  if (model.id.startsWith('anthropic/')) return 'budget';
+  return 'effort';
 };
 
 const normalizeLevel = (level: ThinkingLevel | null | undefined): ThinkingLevel | null => {
@@ -27,8 +25,7 @@ export const resolveThinkingConfig = (
   model: { id: string; supportsThinkingLevels: boolean },
   thinkingLevel: ThinkingLevel | null | undefined,
 ): { reasoning?: OpenRouterReasoning; maxTokens?: number } => {
-  const mode =
-    MODEL_THINKING_MODES[model.id] ?? (model.supportsThinkingLevels ? 'effort' : 'none');
+  const mode = getThinkingMode(model);
   const level = normalizeLevel(thinkingLevel);
   if (!level || mode === 'none') return {};
 

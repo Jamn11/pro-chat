@@ -1,4 +1,7 @@
 import path from 'path';
+import fs from 'fs';
+import { spawnSync } from 'child_process';
+import { fileURLToPath } from 'url';
 import { env } from './env';
 import { createApp } from './app';
 import { PrismaChatRepository } from './repositories/prismaRepo';
@@ -8,19 +11,18 @@ import { MODEL_SEED } from './modelSeed';
 import { MemoryStore } from './services/memoryStore';
 import { MemoryExtractor } from './services/memoryExtractor';
 import { PythonTool } from './services/pythonTool';
-import { BraveSearchProvider } from './services/braveSearchProvider';
-import { SearchTool } from './services/searchTool';
 import { WebFetchTool } from './services/webFetchTool';
 import { StreamTracker } from './services/streamTracker';
 import { startStreamCleanupJob } from './services/streamCleanup';
 
 const repository = new PrismaChatRepository();
 
-const openRouter = new OpenRouterClient({
-  apiKey: env.OPENROUTER_API_KEY,
-  appUrl: env.OPENROUTER_APP_URL,
-  appName: env.OPENROUTER_APP_NAME,
-});
+const openRouterFactory = (apiKey: string) =>
+  new OpenRouterClient({
+    apiKey,
+    appUrl: env.OPENROUTER_APP_URL,
+    appName: env.OPENROUTER_APP_NAME,
+  });
 
 const storageRoot = path.isAbsolute(env.STORAGE_PATH)
   ? env.STORAGE_PATH
@@ -34,9 +36,6 @@ const memoryPath = env.MEMORY_PATH
 
 const memoryStore = new MemoryStore(memoryPath);
 const pythonTool = new PythonTool();
-const searchTool = env.BRAVE_SEARCH_API_KEY
-  ? new SearchTool(new BraveSearchProvider({ apiKey: env.BRAVE_SEARCH_API_KEY }))
-  : undefined;
 
 const parseDomainList = (value?: string): string[] | undefined => {
   if (!value) return undefined;
@@ -64,10 +63,9 @@ const webFetchTool = new WebFetchTool({
 // Stream tracking for resume support
 const streamTracker = new StreamTracker(repository);
 
-const chatService = new ChatService(repository, openRouter, storageRoot, {
+const chatService = new ChatService(repository, openRouterFactory, storageRoot, {
   memoryStore,
   pythonTool,
-  searchTool,
   webFetchTool,
   streamTracker,
   maxToolIterations: 30,
@@ -81,7 +79,7 @@ const chatService = new ChatService(repository, openRouter, storageRoot, {
   },
 });
 
-const memoryExtractor = new MemoryExtractor(repository, memoryStore, openRouter);
+const memoryExtractor = new MemoryExtractor(repository, memoryStore, openRouterFactory);
 
 const app = createApp({
   repo: repository,
@@ -93,8 +91,44 @@ const app = createApp({
   streamTracker,
 });
 
+const resolveSqlitePath = (databaseUrl: string, schemaDir: string): string => {
+  if (databaseUrl.startsWith('file://')) {
+    return fileURLToPath(databaseUrl);
+  }
+  const rawPath = databaseUrl.replace(/^file:/, '').split('?')[0];
+  if (rawPath.startsWith('/')) {
+    return rawPath;
+  }
+  return path.resolve(schemaDir, rawPath);
+};
+
+const resolvePrismaCli = (): string => {
+  const candidates = [
+    path.resolve(process.cwd(), '..', 'node_modules', 'prisma', 'build', 'index.js'),
+    path.resolve(process.cwd(), '..', '..', 'node_modules', 'prisma', 'build', 'index.js'),
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+};
+
 async function bootstrap() {
-  // Users are now created on-demand when they authenticate with Clerk
+  if (env.DATABASE_URL.startsWith('file:')) {
+    const schemaPath = path.resolve(process.cwd(), 'prisma', 'schema.prisma');
+    const schemaDir = path.dirname(schemaPath);
+    const dbPath = resolveSqlitePath(env.DATABASE_URL, schemaDir);
+    if (!fs.existsSync(dbPath)) {
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      const prismaCli = resolvePrismaCli();
+      const result = spawnSync(process.execPath, [prismaCli, 'db', 'push', '--schema', schemaPath], {
+        stdio: 'inherit',
+        env: process.env,
+      });
+      if (result.status !== 0) {
+        throw new Error('Failed to initialize SQLite database via prisma db push.');
+      }
+    }
+  }
+
+  // Models and local storage bootstrap
   await repository.upsertModels(MODEL_SEED);
   await memoryStore.ensureExists();
 

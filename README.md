@@ -13,13 +13,15 @@ npm install
 2. Create `.env` at the repo root:
 
 ```bash
-OPENROUTER_API_KEY=your_key
-DATABASE_URL=postgresql://user:password@localhost:5432/pro_chat
+DATABASE_URL=file:./data/pro-chat.db
 OPENROUTER_APP_URL=http://localhost:5173
 OPENROUTER_APP_NAME=pro-chat
 PORT=8787
 STORAGE_PATH=storage
+MEMORY_PATH=memory
 ```
+
+OpenRouter + Brave Search keys are configured in-app under Settings.
 
 Optional (tooling + trace retention):
 
@@ -42,7 +44,7 @@ TRACE_MAX_SOURCE_SNIPPET_CHARS=600
 TRACE_RETENTION_DAYS=30
 ```
 
-3. Generate Prisma client + run migrations:
+3. Generate Prisma client + sync schema:
 
 ```bash
 npm run prisma:generate -w apps/api
@@ -55,6 +57,18 @@ npm run prisma:migrate -w apps/api
 npm run dev
 ```
 
+## Desktop (Tauri)
+
+```bash
+npm run tauri:dev -w apps/web
+```
+
+Build:
+
+```bash
+npm run tauri:build -w apps/web
+```
+
 ## Tests and lint
 
 ```bash
@@ -64,6 +78,6 @@ npm test
 ```
 
 ## Notes
-- No auth in MVP (private deployment only).
-- File uploads stored on local disk at `apps/api/storage` by default.
+- SQLite database is stored at `apps/api/prisma/data/pro-chat.db` in dev when using the default `.env`. In the packaged desktop app it lives in the app data directory (macOS: `~/Library/Application Support/com.prochat.desktop/pro-chat.db`).
+- File uploads stored on local disk at `apps/api/storage` by default (desktop uses its app data directory).
 - Model list is seeded on API boot.

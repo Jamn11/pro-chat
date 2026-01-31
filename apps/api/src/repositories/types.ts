@@ -13,12 +13,13 @@ import {
 
 export type SettingsRecord = {
   systemPrompt: string | null;
+  openRouterApiKey: string | null;
+  braveSearchApiKey: string | null;
   defaultModelId: string | null;
   defaultThinkingLevel: string | null;
   enabledModelIds: string[];
   enabledTools: string[];
   hideCostPerMessage: boolean;
-  notifications: boolean;
   fontFamily: string;
   fontSize: string;
 };
@@ -50,28 +51,14 @@ export type CreateUsageRecordInput = {
 
 export type UserRecord = {
   id: string;
-  clerkId: string;
   email: string | null;
   firstName: string | null;
   lastName: string | null;
   imageUrl: string | null;
   systemPrompt: string | null;
-  credits: number;
   createdAt: Date;
   updatedAt: Date;
   lastSignInAt: Date | null;
-};
-
-export type CreditsInfo = {
-  credits: number;
-};
-
-export type UpsertUserFromClerkInput = {
-  clerkId: string;
-  email?: string;
-  firstName?: string;
-  lastName?: string;
-  imageUrl?: string;
 };
 
 export type CreateThreadInput = {
@@ -119,17 +106,12 @@ export type UpdateActiveStreamInput = {
 };
 
 export interface ChatRepository {
-  // User management (Clerk integration)
-  findUserByClerkId(clerkId: string): Promise<UserRecord | null>;
-  upsertUserFromClerk(input: UpsertUserFromClerkInput): Promise<UserRecord>;
+  // User management (local desktop)
+  getOrCreateLocalUser(localUserKey: string): Promise<UserRecord>;
 
   // Settings (per-user)
   getSettings(userId: string): Promise<SettingsRecord>;
   updateSettings(userId: string, settings: Partial<SettingsRecord>): Promise<SettingsRecord>;
-
-  // Credits (per-user)
-  getCredits(userId: string): Promise<CreditsInfo>;
-  deductCredits(userId: string, amount: number): Promise<CreditsInfo>;
 
   // Usage stats (per-user)
   getUsageStats(userId: string): Promise<UsageStats>;

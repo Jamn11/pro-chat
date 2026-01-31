@@ -1,5 +1,4 @@
 import express from 'express';
-import cors from 'cors';
 import multer from 'multer';
 import fs from 'fs';
 import path from 'path';
@@ -9,7 +8,7 @@ import { ChatService } from './services/chatService';
 import { ChatRepository } from './repositories/types';
 import { MemoryStore } from './services/memoryStore';
 import { MemoryExtractor } from './services/memoryExtractor';
-import { clerkAuthMiddleware, requireAuthentication, syncUserMiddleware, getUserId } from './middleware/clerkAuth';
+import { getUserId, localUserMiddleware } from './middleware/localUser';
 import { StreamTracker } from './services/streamTracker';
 
 const uploadSchema = z.object({
@@ -22,12 +21,13 @@ const createThreadSchema = z.object({
 
 const settingsSchema = z.object({
   systemPrompt: z.string().optional().nullable(),
+  openRouterApiKey: z.string().optional().nullable(),
+  braveSearchApiKey: z.string().optional().nullable(),
   defaultModelId: z.string().optional().nullable(),
   defaultThinkingLevel: z.string().optional().nullable(),
   enabledModelIds: z.array(z.string()).optional(),
   enabledTools: z.array(z.string()).optional(),
   hideCostPerMessage: z.boolean().optional(),
-  notifications: z.boolean().optional(),
   fontFamily: z.string().optional(),
   fontSize: z.string().optional(),
 });
@@ -78,11 +78,7 @@ export function createApp({
 }) {
   const app = express();
 
-  app.use(cors());
   app.use(express.json({ limit: '10mb' }));
-
-  // Clerk authentication middleware
-  app.use(clerkAuthMiddleware);
 
   const upload = multer({
     storage: multer.diskStorage({
@@ -101,8 +97,8 @@ export function createApp({
     res.json({ ok: true });
   });
 
-  // Protected routes - require authentication and sync user to database
-  app.use('/api', requireAuthentication, syncUserMiddleware(repo));
+  // Local-only user context for all API routes
+  app.use('/api', localUserMiddleware(repo));
 
   app.get('/api/models', async (_req, res, next) => {
     try {
@@ -139,17 +135,6 @@ export function createApp({
       const userId = getUserId(req);
       const stats = await repo.getUsageStats(userId);
       res.json(stats);
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  // Credits endpoints
-  app.get('/api/credits', async (req, res, next) => {
-    try {
-      const userId = getUserId(req);
-      const credits = await repo.getCredits(userId);
-      res.json(credits);
     } catch (error) {
       next(error);
     }

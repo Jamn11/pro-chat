@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useAuth } from '@clerk/clerk-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -7,7 +6,6 @@ import {
   checkActiveStream,
   createThread,
   deleteThread,
-  fetchCredits,
   fetchMemory,
   fetchMessages,
   fetchModels,
@@ -15,20 +13,18 @@ import {
   fetchThreads,
   fetchUsageStats,
   resumeStream,
-  setAuthTokenGetter,
   streamChat,
   triggerMemoryExtraction,
   updateMemory,
   updateSettings,
   uploadFiles,
 } from './api';
-import { AuthGuard, UserMenu } from './components/AuthGuard';
-import type { ActiveStreamInfo, Attachment, CreditsInfo, ModelInfo, Settings, ThreadSummary, UIMessage, UsageStats } from './types';
+import type { ActiveStreamInfo, Attachment, ModelInfo, Settings, ThreadSummary, UIMessage, UsageStats } from './types';
 import './App.css';
 
 type Theme = 'light' | 'dark';
 type ViewMode = 'chat' | 'settings';
-type SettingsTab = 'personalization' | 'instructions' | 'usage' | 'credits';
+type SettingsTab = 'personalization' | 'instructions' | 'usage';
 type ThinkingLevel = 'low' | 'medium' | 'high' | 'xhigh';
 type ThinkingSelection = ThinkingLevel | null;
 
@@ -56,12 +52,10 @@ const CLAUDE_THINKING_BUDGETS: Record<ThinkingLevel, number> = {
   xhigh: 65536,
 };
 
-const MODEL_THINKING_PROFILES: Record<string, ThinkingProfile> = {
-  'openai/gpt-5.2': { mode: 'effort' },
-  'x-ai/grok-4.1-fast': { mode: 'effort' },
-  'anthropic/claude-opus-4.5': { mode: 'budget' },
-  'anthropic/claude-sonnet-4.5': { mode: 'budget' },
-  'google/gemini-3-pro-preview': { mode: 'none' },
+const getThinkingProfile = (model: ModelInfo | null): ThinkingProfile => {
+  if (!model || !model.supportsThinkingLevels) return { mode: 'none' };
+  if (model.id.startsWith('anthropic/')) return { mode: 'budget' };
+  return { mode: 'effort' };
 };
 
 const formatBudgetLabel = (tokens: number) => `${Math.round(tokens / 1024)}k`;
@@ -70,9 +64,7 @@ const getThinkingOptions = (model: ModelInfo | null): ThinkingOption[] => {
   if (!model) {
     return [{ value: null, label: 'Thinking: Off' }];
   }
-  const profile =
-    MODEL_THINKING_PROFILES[model.id] ??
-    (model.supportsThinkingLevels ? { mode: 'effort' } : { mode: 'none' });
+  const profile = getThinkingProfile(model);
   if (profile.mode === 'none') {
     return [{ value: null, label: 'Thinking: Off' }];
   }
@@ -131,6 +123,28 @@ const formatDuration = (ms?: number | null) => {
   return `${seconds.toFixed(2)}s`;
 };
 
+const notifyDesktop = async (title: string, body: string) => {
+  if (typeof window === 'undefined') return;
+  const tauriPresent = (window as { __TAURI__?: unknown }).__TAURI__;
+  if (!tauriPresent) return;
+
+  try {
+    const { isPermissionGranted, requestPermission, sendNotification } = await import(
+      '@tauri-apps/plugin-notification'
+    );
+    let granted = await isPermissionGranted();
+    if (!granted) {
+      const permission = await requestPermission();
+      granted = permission === 'granted';
+    }
+    if (granted) {
+      sendNotification({ title, body });
+    }
+  } catch {
+    // Ignore notification failures in non-Tauri contexts.
+  }
+};
+
 type PreBlockProps = {
   children?: React.ReactNode;
   node?: unknown;
@@ -159,7 +173,6 @@ function PreBlock({ children, ...props }: PreBlockProps) {
 }
 
 export default function App() {
-  const { getToken, isLoaded: isAuthLoaded } = useAuth();
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<UIMessage[]>([]);
@@ -175,19 +188,20 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('personalization');
   const [settings, setSettings] = useState<Settings>({
     systemPrompt: null,
+    openRouterApiKey: null,
+    braveSearchApiKey: null,
     defaultModelId: null,
     defaultThinkingLevel: null,
     enabledModelIds: [],
     enabledTools: ['web_search', 'code_interpreter', 'memory'],
     hideCostPerMessage: false,
-    notifications: true,
     fontFamily: 'Space Mono',
     fontSize: 'medium',
   });
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
-  const [credits, setCredits] = useState<CreditsInfo | null>(null);
   const [pendingSettings, setPendingSettings] = useState<Settings | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [settingsModelQuery, setSettingsModelQuery] = useState('');
   const [theme, setTheme] = useState<Theme>(() => {
     if (typeof window === 'undefined') return 'dark';
     const storage = window.localStorage;
@@ -221,6 +235,16 @@ export default function App() {
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId) || null;
   const selectedModel = models.find((model) => model.id === selectedModelId) || null;
+
+  const filteredSettingsModels = useMemo(() => {
+    const query = settingsModelQuery.trim().toLowerCase();
+    if (!query) return models;
+    return models.filter((model) => {
+      const label = model.label.toLowerCase();
+      const id = model.id.toLowerCase();
+      return label.includes(query) || id.includes(query);
+    });
+  }, [models, settingsModelQuery]);
   const thinkingOptions = useMemo(() => getThinkingOptions(selectedModel), [selectedModel]);
   const slashCommand = useMemo<SlashCommand | null>(() => {
     const trimmed = composer.trimStart();
@@ -303,23 +327,15 @@ export default function App() {
     activeThreadIdRef.current = activeThreadId;
   }, [activeThreadId]);
 
-  // Set up auth token getter for API calls
+  // Load initial data
   useEffect(() => {
-    setAuthTokenGetter(getToken);
-  }, [getToken]);
-
-  // Load initial data once auth is ready
-  useEffect(() => {
-    if (!isAuthLoaded) return;
-
     async function load() {
-      const [modelList, threadList, fetchedSettings, memory, usage, creditsInfo] = await Promise.all([
+      const [modelList, threadList, fetchedSettings, memory, usage] = await Promise.all([
         fetchModels(),
         fetchThreads(),
         fetchSettings(),
         fetchMemory().catch(() => ({ content: '' })),
         fetchUsageStats().catch(() => null),
-        fetchCredits().catch(() => ({ credits: 10.0 })),
       ]);
       setModels(modelList);
       setThreads(threadList);
@@ -327,12 +343,13 @@ export default function App() {
       // Initialize settings with defaults for any missing fields
       const normalizedSettings: Settings = {
         systemPrompt: fetchedSettings.systemPrompt ?? null,
+        openRouterApiKey: fetchedSettings.openRouterApiKey ?? null,
+        braveSearchApiKey: fetchedSettings.braveSearchApiKey ?? null,
         defaultModelId: fetchedSettings.defaultModelId ?? null,
         defaultThinkingLevel: fetchedSettings.defaultThinkingLevel ?? null,
         enabledModelIds: fetchedSettings.enabledModelIds ?? modelList.map(m => m.id),
         enabledTools: fetchedSettings.enabledTools ?? ['web_search', 'code_interpreter', 'memory'],
         hideCostPerMessage: fetchedSettings.hideCostPerMessage ?? false,
-        notifications: fetchedSettings.notifications ?? true,
         fontFamily: fetchedSettings.fontFamily ?? 'Space Mono',
         fontSize: fetchedSettings.fontSize ?? 'medium',
       };
@@ -340,7 +357,6 @@ export default function App() {
       setSystemPrompt(normalizedSettings.systemPrompt ?? '');
       setMemoryContent(memory.content ?? '');
       if (usage) setUsageStats(usage);
-      setCredits(creditsInfo);
 
       // Use default model from settings if available, otherwise first model
       if (modelList.length > 0) {
@@ -364,7 +380,7 @@ export default function App() {
     load().catch((error) => {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to load');
     });
-  }, [isAuthLoaded]);
+  }, []);
 
   useEffect(() => {
     setAttachments([]);
@@ -761,17 +777,12 @@ export default function App() {
             fetchMemory()
               .then((memory) => setMemoryContent(memory.content ?? ''))
               .catch(() => {});
-            // Refresh credits and usage stats after message cost is deducted
-            fetchCredits()
-              .then((creditsInfo) => setCredits(creditsInfo))
-              .catch(() => {});
             fetchUsageStats()
               .then((stats) => setUsageStats(stats))
               .catch(() => {});
-            // Show notification if enabled and page not focused
             if (document.hidden) {
               const preview = data.assistantMessage.content?.slice(0, 100) || 'Response ready';
-              showNotification('Pro Chat', preview);
+              notifyDesktop('Pro Chat', preview);
             }
           },
           onError: (message) => {
@@ -966,13 +977,13 @@ export default function App() {
             fetchMemory()
               .then((memory) => setMemoryContent(memory.content ?? ''))
               .catch(() => {});
-            // Refresh credits and usage stats after message cost is deducted
-            fetchCredits()
-              .then((creditsInfo) => setCredits(creditsInfo))
-              .catch(() => {});
             fetchUsageStats()
               .then((stats) => setUsageStats(stats))
               .catch(() => {});
+            if (document.hidden) {
+              const preview = data.assistantMessage.content?.slice(0, 100) || 'Response ready';
+              notifyDesktop('Pro Chat', preview);
+            }
           },
           onError: (message) => {
             setMessages((prev) =>
@@ -1078,32 +1089,6 @@ export default function App() {
     setPendingSettings(null);
   };
 
-  const requestNotificationPermission = async () => {
-    if (!('Notification' in window)) {
-      setErrorMessage('Browser does not support notifications');
-      return false;
-    }
-    if (Notification.permission === 'granted') {
-      return true;
-    }
-    if (Notification.permission === 'denied') {
-      setErrorMessage('Notification permission denied. Please enable in browser settings.');
-      return false;
-    }
-    const permission = await Notification.requestPermission();
-    if (permission === 'granted') {
-      return true;
-    }
-    setErrorMessage('Notification permission denied');
-    return false;
-  };
-
-  const showNotification = (title: string, body: string) => {
-    if (effectiveSettings.notifications && Notification.permission === 'granted') {
-      new Notification(title, { body, icon: '/favicon.ico' });
-    }
-  };
-
   const handleMemorySave = async () => {
     try {
       const updated = await updateMemory(memoryContent);
@@ -1135,16 +1120,15 @@ export default function App() {
   };
 
   return (
-    <AuthGuard>
-      <div
-        className={`app ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${
-          isDragActive ? 'drag-active' : ''
-        }`}
-        onDragEnter={handleDragEnter}
-        onDragLeave={handleDragLeave}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-      >
+    <div
+      className={`app ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${
+        isDragActive ? 'drag-active' : ''
+      }`}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
         {isDragActive && (
           <div className="drop-overlay" aria-hidden="true">
             Drop files to attach
@@ -1157,7 +1141,6 @@ export default function App() {
           <div className="sidebar-top">
             <div className="brand">{sidebarCollapsed ? 'pc' : 'pro-chat'}</div>
             <div className="sidebar-actions">
-              <UserMenu />
               <button
                 className="icon-button"
                 onClick={() => setSidebarCollapsed((prev) => !prev)}
@@ -1230,11 +1213,6 @@ export default function App() {
                 </div>
               </div>
               <div className="chat-meta">
-                {credits && (
-                  <span className={`credits-chip ${credits.credits < 1 ? 'low' : ''}`}>
-                    {credits.credits.toFixed(2)} credits
-                  </span>
-                )}
                 <span className="cost-chip">Chat total {formatCost(chatTotalCost)}</span>
                 {isStreaming && (
                   <span className="timer-chip">⏱ {(streamDuration / 1000).toFixed(1)}s</span>
@@ -1540,12 +1518,6 @@ export default function App() {
               >
                 Usage
               </button>
-              <button
-                className={`settings-tab ${settingsTab === 'credits' ? 'active' : ''}`}
-                onClick={() => setSettingsTab('credits')}
-              >
-                Credits
-              </button>
             </div>
 
             <div className="settings-content">
@@ -1564,6 +1536,38 @@ export default function App() {
                       >
                         {theme === 'dark' ? 'Switch to Light' : 'Switch to Dark'}
                       </button>
+                    </div>
+                  </div>
+
+                  {/* API Keys */}
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div>
+                        <h3>API Keys</h3>
+                        <p>Bring your own keys for OpenRouter and Brave Search.</p>
+                      </div>
+                    </div>
+                    <div className="settings-grid">
+                      <div className="settings-field">
+                        <label>OpenRouter API Key</label>
+                        <input
+                          className="settings-input"
+                          type="password"
+                          value={effectiveSettings.openRouterApiKey ?? ''}
+                          onChange={(e) => handleSettingsChange({ openRouterApiKey: e.target.value || null })}
+                          placeholder="sk-or-..."
+                        />
+                      </div>
+                      <div className="settings-field">
+                        <label>Brave Search API Key (optional)</label>
+                        <input
+                          className="settings-input"
+                          type="password"
+                          value={effectiveSettings.braveSearchApiKey ?? ''}
+                          onChange={(e) => handleSettingsChange({ braveSearchApiKey: e.target.value || null })}
+                          placeholder="BSAK..."
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -1622,29 +1626,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Notifications */}
-                  <div className="settings-card">
-                    <div className="settings-row">
-                      <div>
-                        <h3>Notifications</h3>
-                        <p>Enable browser notifications for completed responses.</p>
-                      </div>
-                      <button
-                        className={`toggle-button ${effectiveSettings.notifications ? 'active' : ''}`}
-                        onClick={async () => {
-                          const newVal = !effectiveSettings.notifications;
-                          if (newVal) {
-                            const granted = await requestNotificationPermission();
-                            if (!granted) return;
-                          }
-                          handleSettingsChange({ notifications: newVal });
-                        }}
-                      >
-                        {effectiveSettings.notifications ? 'On' : 'Off'}
-                      </button>
-                    </div>
-                  </div>
-
                   {/* Default Model */}
                   <div className="settings-card">
                     <div className="settings-row">
@@ -1694,18 +1675,43 @@ export default function App() {
                         <h3>Available Models</h3>
                         <p>Choose which models to show in the selector.</p>
                       </div>
-                      <button
-                        className="button ghost"
-                        onClick={() => {
-                          const allIds = models.map(m => m.id);
-                          handleSettingsChange({ enabledModelIds: allIds });
-                        }}
-                      >
-                        Enable All
-                      </button>
+                      <div className="settings-model-actions">
+                        <button
+                          className="button ghost"
+                          onClick={() => {
+                            const allIds = models.map((model) => model.id);
+                            handleSettingsChange({ enabledModelIds: allIds });
+                          }}
+                        >
+                          Enable All
+                        </button>
+                        {settingsModelQuery.trim() && (
+                          <button
+                            className="button ghost"
+                            onClick={() => {
+                              const filteredIds = filteredSettingsModels.map((model) => model.id);
+                              handleSettingsChange({ enabledModelIds: filteredIds });
+                            }}
+                          >
+                            Enable Results
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="settings-model-filter">
+                      <input
+                        className="settings-input"
+                        type="search"
+                        value={settingsModelQuery}
+                        onChange={(event) => setSettingsModelQuery(event.target.value)}
+                        placeholder="Search models by name or ID"
+                      />
+                      <div className="settings-model-meta">
+                        Showing {filteredSettingsModels.length} of {models.length}
+                      </div>
                     </div>
                     <div className="settings-model-list">
-                      {models.map((model) => {
+                      {filteredSettingsModels.map((model) => {
                         const isEnabled = effectiveSettings.enabledModelIds.length === 0 || effectiveSettings.enabledModelIds.includes(model.id);
                         return (
                           <label key={model.id} className="settings-checkbox">
@@ -2041,75 +2047,6 @@ export default function App() {
                 </>
               )}
 
-              {settingsTab === 'credits' && (
-                <>
-                  {/* Credits Balance */}
-                  <div className="settings-card credits-balance-card">
-                    <div className="credits-balance">
-                      <div className="credits-amount">
-                        <span className="credits-value">
-                          {credits ? credits.credits.toFixed(2) : '—'}
-                        </span>
-                        <span className="credits-label">credits remaining</span>
-                      </div>
-                      <div className="credits-info">
-                        <p>1 credit = $1.00 USD</p>
-                        <p>Credits are deducted based on API usage costs.</p>
-                      </div>
-                    </div>
-                    {credits && credits.credits < 1 && (
-                      <div className="credits-warning">
-                        Your credit balance is low. You may run out of credits soon.
-                      </div>
-                    )}
-                  </div>
-
-                  {/* How Credits Work */}
-                  <div className="settings-card">
-                    <h3>How Credits Work</h3>
-                    <div className="credits-explanation">
-                      <div className="credits-explanation-item">
-                        <span className="credits-explanation-icon">💬</span>
-                        <div>
-                          <strong>LLM Usage</strong>
-                          <p>Credits are deducted based on the tokens used in your conversations. Different models have different costs per token.</p>
-                        </div>
-                      </div>
-                      <div className="credits-explanation-item">
-                        <span className="credits-explanation-icon">🔍</span>
-                        <div>
-                          <strong>Web Search</strong>
-                          <p>Each web search costs $0.005 (0.5 cents) per request.</p>
-                        </div>
-                      </div>
-                      <div className="credits-explanation-item">
-                        <span className="credits-explanation-icon">🎁</span>
-                        <div>
-                          <strong>Starter Credits</strong>
-                          <p>All new accounts receive 10 free credits to get started.</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Usage Summary */}
-                  {usageStats && (
-                    <div className="settings-card">
-                      <h3>Credits Used</h3>
-                      <div className="credits-used-summary">
-                        <div className="credits-used-stat">
-                          <span className="credits-used-value">{formatCost(usageStats.totalCost)}</span>
-                          <span className="credits-used-label">Total Spent</span>
-                        </div>
-                        <div className="credits-used-stat">
-                          <span className="credits-used-value">{usageStats.totalMessages.toLocaleString()}</span>
-                          <span className="credits-used-label">Messages</span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
             </div>
           </section>
         )}
@@ -2209,12 +2146,11 @@ export default function App() {
         </>
       )}
 
-        {errorMessage && (
-          <div className="toast" onClick={() => setErrorMessage(null)}>
-            {errorMessage}
-          </div>
-        )}
-      </div>
-    </AuthGuard>
+      {errorMessage && (
+        <div className="toast" onClick={() => setErrorMessage(null)}>
+          {errorMessage}
+        </div>
+      )}
+    </div>
   );
 }

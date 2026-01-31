@@ -52,15 +52,27 @@ export class MemoryExtractor {
   constructor(
     private repo: ChatRepository,
     private memoryStore: MemoryStore,
-    private openRouter: OpenRouterClient,
+    private openRouterFactory: (apiKey: string) => OpenRouterClient,
   ) {}
 
-  async extractFromThread(threadId: string): Promise<MemoryExtractionResult> {
+  async extractFromThread(userId: string, threadId: string): Promise<MemoryExtractionResult> {
     try {
       const messages = await this.repo.getThreadMessages(threadId);
       if (messages.length === 0) {
         return { threadId, extracted: [], skipped: true };
       }
+
+      const settings = await this.repo.getSettings(userId);
+      const openRouterApiKey = settings.openRouterApiKey?.trim();
+      if (!openRouterApiKey) {
+        return {
+          threadId,
+          extracted: [],
+          skipped: false,
+          error: 'OpenRouter API key required. Add it in Settings.',
+        };
+      }
+      const openRouter = this.openRouterFactory(openRouterApiKey);
 
       const currentMemory = await this.memoryStore.read();
       const conversationText = formatConversation(messages);
@@ -70,7 +82,7 @@ export class MemoryExtractor {
         .replace('{CONVERSATION}', conversationText);
 
       let response = '';
-      await this.openRouter.streamChat(
+      await openRouter.streamChat(
         {
           model: EXTRACTION_MODEL,
           messages: [{ role: 'user', content: prompt }],
@@ -119,7 +131,7 @@ export class MemoryExtractor {
     let errors = 0;
 
     for (const thread of threads) {
-      const result = await this.extractFromThread(thread.id);
+      const result = await this.extractFromThread(userId, thread.id);
       results.push(result);
 
       if (result.error) {

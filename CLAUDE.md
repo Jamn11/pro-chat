@@ -31,3 +31,5 @@ There will likely be multiple AI agents (and people) working on this codebase at
 ```
 
 If `--ff-only` fails, another branch was merged first. Go back to step 1.
+
+DO NOT MERGE TO MAIN UNTIL THE USER EXPLICITLY TELLS YOU TO

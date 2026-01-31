@@ -1,6 +1,5 @@
 import type {
   CheckActiveStreamResponse,
-  CreditsInfo,
   Memory,
   MemoryExtractionResult,
   Message,
@@ -13,28 +12,26 @@ import type {
 } from './types';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
+const resolveApiBase = () => {
+  if (typeof window === 'undefined') return 'http://127.0.0.1:8787';
+  const origin = window.location.origin;
+  if (
+    origin.startsWith('http://localhost:5173') ||
+    origin.startsWith('http://127.0.0.1:5173')
+  ) {
+    return '';
+  }
+  return 'http://127.0.0.1:8787';
+};
 
-// Auth token getter - set by the app when ClerkProvider is ready
-let getAuthToken: (() => Promise<string | null>) | null = null;
+const API_BASE = resolveApiBase().replace(/\/+$/, '');
+const buildUrl = (path: string) => (API_BASE ? `${API_BASE}${path}` : path);
 
-export function setAuthTokenGetter(getter: () => Promise<string | null>) {
-  getAuthToken = getter;
-}
-
-async function getAuthHeaders(): Promise<Record<string, string>> {
-  if (!getAuthToken) return {};
-  const token = await getAuthToken();
-  if (!token) return {};
-  return { Authorization: `Bearer ${token}` };
-}
-
-async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  const authHeaders = await getAuthHeaders();
-  return fetch(url, {
+async function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  return fetch(buildUrl(url), {
     ...options,
     headers: {
       ...options.headers,
-      ...authHeaders,
     },
   });
 }
@@ -48,19 +45,19 @@ async function handleJson<T>(response: Response): Promise<T> {
 }
 
 export async function fetchModels(): Promise<ModelInfo[]> {
-  const res = await authFetch('/api/models');
+  const res = await apiFetch('/api/models');
   const data = await handleJson<{ models: ModelInfo[] }>(res);
   return data.models;
 }
 
 export async function fetchThreads(): Promise<ThreadSummary[]> {
-  const res = await authFetch('/api/threads');
+  const res = await apiFetch('/api/threads');
   const data = await handleJson<{ threads: ThreadSummary[] }>(res);
   return data.threads;
 }
 
 export async function createThread(title?: string | null): Promise<ThreadSummary> {
-  const res = await authFetch('/api/threads', {
+  const res = await apiFetch('/api/threads', {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify({ title }),
@@ -69,7 +66,7 @@ export async function createThread(title?: string | null): Promise<ThreadSummary
 }
 
 export async function deleteThread(threadId: string): Promise<void> {
-  const res = await authFetch(`/api/threads/${threadId}`, { method: 'DELETE' });
+  const res = await apiFetch(`/api/threads/${threadId}`, { method: 'DELETE' });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || 'Delete failed');
@@ -77,18 +74,18 @@ export async function deleteThread(threadId: string): Promise<void> {
 }
 
 export async function fetchMessages(threadId: string): Promise<Message[]> {
-  const res = await authFetch(`/api/threads/${threadId}/messages`);
+  const res = await apiFetch(`/api/threads/${threadId}/messages`);
   const data = await handleJson<{ messages: Message[] }>(res);
   return data.messages;
 }
 
 export async function fetchSettings(): Promise<Settings> {
-  const res = await authFetch('/api/settings');
+  const res = await apiFetch('/api/settings');
   return handleJson<Settings>(res);
 }
 
 export async function updateSettings(settings: Partial<Settings>): Promise<Settings> {
-  const res = await authFetch('/api/settings', {
+  const res = await apiFetch('/api/settings', {
     method: 'PUT',
     headers: JSON_HEADERS,
     body: JSON.stringify(settings),
@@ -97,22 +94,17 @@ export async function updateSettings(settings: Partial<Settings>): Promise<Setti
 }
 
 export async function fetchUsageStats(): Promise<UsageStats> {
-  const res = await authFetch('/api/usage');
+  const res = await apiFetch('/api/usage');
   return handleJson<UsageStats>(res);
 }
 
-export async function fetchCredits(): Promise<CreditsInfo> {
-  const res = await authFetch('/api/credits');
-  return handleJson<CreditsInfo>(res);
-}
-
 export async function fetchMemory(): Promise<Memory> {
-  const res = await authFetch('/api/memory');
+  const res = await apiFetch('/api/memory');
   return handleJson<Memory>(res);
 }
 
 export async function updateMemory(content: string): Promise<Memory> {
-  const res = await authFetch('/api/memory', {
+  const res = await apiFetch('/api/memory', {
     method: 'PUT',
     headers: JSON_HEADERS,
     body: JSON.stringify({ content }),
@@ -121,7 +113,7 @@ export async function updateMemory(content: string): Promise<Memory> {
 }
 
 export async function triggerMemoryExtraction(): Promise<MemoryExtractionResult> {
-  const res = await authFetch('/api/memory/extract', {
+  const res = await apiFetch('/api/memory/extract', {
     method: 'POST',
     headers: JSON_HEADERS,
   });
@@ -135,10 +127,8 @@ export async function uploadFiles(threadId: string, files: FileList): Promise<Up
     formData.append('files', file);
   });
 
-  const authHeaders = await getAuthHeaders();
-  const res = await fetch('/api/uploads', {
+  const res = await fetch(buildUrl('/api/uploads'), {
     method: 'POST',
-    headers: authHeaders,
     body: formData,
   });
 
@@ -187,10 +177,9 @@ export async function streamChat(
   callbacks: StreamCallbacks,
 ) {
   const { signal, ...body } = payload;
-  const authHeaders = await getAuthHeaders();
-  const response = await fetch('/api/chat/stream', {
+  const response = await fetch(buildUrl('/api/chat/stream'), {
     method: 'POST',
-    headers: { ...JSON_HEADERS, ...authHeaders },
+    headers: JSON_HEADERS,
     body: JSON.stringify(body),
     signal,
   });
@@ -242,7 +231,7 @@ export async function streamChat(
 }
 
 export async function checkActiveStream(threadId: string): Promise<CheckActiveStreamResponse> {
-  const res = await fetch(`/api/threads/${threadId}/active-stream`);
+  const res = await fetch(buildUrl(`/api/threads/${threadId}/active-stream`));
   return handleJson<CheckActiveStreamResponse>(res);
 }
 
@@ -251,7 +240,7 @@ export async function resumeStream(
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
 ) {
-  const response = await fetch('/api/chat/resume', {
+  const response = await fetch(buildUrl('/api/chat/resume'), {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify({ streamId }),

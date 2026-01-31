@@ -3,39 +3,13 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
-}
-
-enum MessageRole {
-  user
-  assistant
-  system
-}
-
-enum AttachmentKind {
-  image
-  file
-}
-
-enum ThinkingLevel {
-  low
-  medium
-  high
-  xhigh
-}
-
-enum StreamStatus {
-  active
-  pending
-  completed
-  failed
-  cancelled
 }
 
 model User {
   id                   String       @id @default(cuid())
-  clerkId              String       @unique
+  localUserKey         String?      @unique
   email                String?      @unique
   firstName            String?
   lastName             String?
@@ -44,18 +18,16 @@ model User {
   updatedAt            DateTime     @updatedAt
   lastSignInAt         DateTime?
   systemPrompt         String?
+  openRouterApiKey     String?
+  braveSearchApiKey    String?
   defaultModelId       String?
   defaultThinkingLevel String?
-  enabledModelIds      String[]     @default([])
-  enabledTools         String[]     @default(["web_search", "code_interpreter", "memory"])
+  enabledModelIds      String       @default("[]")
+  enabledTools         String       @default("[\"web_search\",\"code_interpreter\",\"memory\"]")
   hideCostPerMessage   Boolean      @default(false)
-  notifications        Boolean      @default(true)
   fontFamily           String       @default("Space Mono")
   fontSize             String       @default("medium")
-  credits              Float        @default(10.0)
   threads              ChatThread[]
-
-  @@index([clerkId])
 }
 
 model ChatThread {
@@ -87,19 +59,19 @@ model Message {
   id               String        @id @default(cuid())
   threadId         String
   thread           ChatThread    @relation(fields: [threadId], references: [id])
-  role             MessageRole
+  role             String
   content          String
   modelId          String?
   model            Model?        @relation(fields: [modelId], references: [id])
-  thinkingLevel    ThinkingLevel?
+  thinkingLevel    String?
   createdAt        DateTime      @default(now())
   durationMs       Int?
   promptTokens     Int?
   completionTokens Int?
   cost             Float         @default(0)
   attachments      Attachment[]
-  trace            Json?         // Trace events for debugging/inspection
-  sources          Json?         // Source references from web/search tools
+  trace            String?       // JSON-encoded trace events for debugging/inspection
+  sources          String?       // JSON-encoded source references from web/search tools
 }
 
 model Attachment {
@@ -112,7 +84,7 @@ model Attachment {
   path      String
   mimeType  String
   size      Int
-  kind      AttachmentKind
+  kind      String
   createdAt DateTime      @default(now())
 }
 
@@ -122,11 +94,11 @@ model ActiveStream {
   thread             ChatThread    @relation(fields: [threadId], references: [id], onDelete: Cascade)
   userMessageId      String        @unique
   assistantMessageId String?       @unique
-  status             StreamStatus  @default(active)
+  status             String        @default("active")
   partialContent     String        @default("")
-  partialTrace       Json?
+  partialTrace       String?       // JSON-encoded trace events
   modelId            String
-  thinkingLevel      ThinkingLevel?
+  thinkingLevel      String?
   startedAt          DateTime      @default(now())
   lastActivityAt     DateTime      @default(now())
   completedAt        DateTime?

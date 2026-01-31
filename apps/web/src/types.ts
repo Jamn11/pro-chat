@@ -40,12 +40,13 @@ export type Message = {
 
 export type Settings = {
   systemPrompt: string | null;
+  openRouterApiKey: string | null;
+  braveSearchApiKey: string | null;
   defaultModelId: string | null;
   defaultThinkingLevel: string | null;
   enabledModelIds: string[];
   enabledTools: string[];
   hideCostPerMessage: boolean;
-  notifications: boolean;
   fontFamily: string;
   fontSize: string;
 };
@@ -79,10 +80,6 @@ export type MessageSource = {
 
 export type Memory = {
   content: string;
-};
-
-export type CreditsInfo = {
-  credits: number;
 };
 
 export type MemoryExtractionResult = {

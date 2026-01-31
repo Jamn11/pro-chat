@@ -19,6 +19,7 @@ import {
   memoryWriteToolDefinition,
 } from './memoryTool';
 import { PYTHON_TOOL_NAME, PythonTool, pythonToolDefinition } from './pythonTool';
+import { BraveSearchProvider } from './braveSearchProvider';
 import { SEARCH_TOOL_NAME, SearchTool, searchToolDefinition } from './searchTool';
 import { WEB_FETCH_TOOL_NAME, WebFetchTool, webFetchToolDefinition } from './webFetchTool';
 import { StreamTracker } from './streamTracker';
@@ -58,12 +59,13 @@ export type SendMessageResult = {
 type ChatServiceOptions = {
   memoryStore?: MemoryStore;
   pythonTool?: PythonTool;
-  searchTool?: SearchTool;
   webFetchTool?: WebFetchTool;
   maxToolIterations?: number;
   tracePolicy?: Partial<TracePolicy>;
   streamTracker?: StreamTracker;
 };
+
+type OpenRouterClientFactory = (apiKey: string) => OpenRouterClient;
 
 type TracePolicy = {
   maxEvents: number;
@@ -88,7 +90,7 @@ export class ChatService {
 
   constructor(
     private repo: ChatRepository,
-    private openRouter: OpenRouterClient,
+    private openRouterFactory: OpenRouterClientFactory,
     private storageRoot: string,
     private options: ChatServiceOptions = {},
   ) {
@@ -97,7 +99,11 @@ export class ChatService {
     }
   }
 
-  private async generateTitle(threadId: string, firstMessage: string): Promise<void> {
+  private async generateTitle(
+    openRouter: OpenRouterClient,
+    threadId: string,
+    firstMessage: string,
+  ): Promise<void> {
     const TITLE_MODEL = 'anthropic/claude-haiku-4.5';
     const prompt = `Generate a short, descriptive title (3-6 words) for a chat conversation that starts with this message. Return only the title, no quotes or punctuation at the end.
 
@@ -105,7 +111,7 @@ User's first message:
 ${firstMessage.slice(0, 500)}`;
 
     try {
-      const result = await this.openRouter.chat({
+      const result = await openRouter.chat({
         model: TITLE_MODEL,
         messages: [{ role: 'user', content: prompt }],
         maxTokens: 30,
@@ -123,6 +129,12 @@ ${firstMessage.slice(0, 500)}`;
       }
       throw error;
     }
+  }
+
+  private createSearchTool(apiKey?: string | null): SearchTool | undefined {
+    const trimmed = apiKey?.trim();
+    if (!trimmed) return undefined;
+    return new SearchTool(new BraveSearchProvider({ apiKey: trimmed }));
   }
 
   async sendMessageStream(
@@ -156,9 +168,18 @@ ${firstMessage.slice(0, 500)}`;
     if (!thread) {
       throw new Error('Thread not found');
     }
+
+    const settings = await this.repo.getSettings(input.userId);
+    const openRouterApiKey = settings.openRouterApiKey?.trim();
+    if (!openRouterApiKey) {
+      throw new Error('OpenRouter API key required. Add it in Settings.');
+    }
+    const openRouter = this.openRouterFactory(openRouterApiKey);
+    const searchTool = this.createSearchTool(settings.braveSearchApiKey);
+
     if (!thread.title) {
       // Generate title asynchronously using LLM (don't await to not block message sending)
-      this.generateTitle(input.threadId, input.content).catch((err) => {
+      this.generateTitle(openRouter, input.threadId, input.content).catch((err) => {
         console.error('Failed to generate chat title:', err);
       });
     }
@@ -175,7 +196,6 @@ ${firstMessage.slice(0, 500)}`;
       await this.repo.attachAttachmentsToMessage(userMessage.id, attachments.map((a) => a.id));
     }
 
-    const settings = await this.repo.getSettings(input.userId);
     const history = await this.repo.getThreadMessages(input.threadId);
     const systemPrompt = settings.systemPrompt?.trim();
     const memory = await this.options.memoryStore?.read();
@@ -242,7 +262,7 @@ ${firstMessage.slice(0, 500)}`;
 
     const start = Date.now();
     const { reasoning, maxTokens } = resolveThinkingConfig(model, input.thinkingLevel ?? null);
-    const toolHandlers = this.getToolHandlers();
+    const toolHandlers = this.getToolHandlers(searchTool);
     const tools = toolHandlers.map((handler) => handler.definition);
     const maxToolIterations = this.options.maxToolIterations ?? 4;
 
@@ -332,7 +352,7 @@ ${firstMessage.slice(0, 500)}`;
     };
 
     while (iterations <= maxToolIterations) {
-      const result = await this.openRouter.streamChat(
+      const result = await openRouter.streamChat(
         {
           model: model.id,
           messages: openRouterMessages,
@@ -390,9 +410,6 @@ ${firstMessage.slice(0, 500)}`;
     const llmCost = calculateCost(promptTokens, completionTokens, model);
     const searchCost = searchCallCount * SEARCH_COST_PER_REQUEST;
     const cost = llmCost + searchCost;
-
-    // Deduct credits from user (cost is in dollars, credits are 1:1 with dollars)
-    await this.repo.deductCredits(input.userId, cost);
 
     let assistantMessage: MessageRecord;
 
@@ -487,6 +504,13 @@ ${firstMessage.slice(0, 500)}`;
     }
 
     const settings = await this.repo.getSettings(userId);
+    const openRouterApiKey = settings.openRouterApiKey?.trim();
+    if (!openRouterApiKey) {
+      await streamTracker.failStream(streamId);
+      throw new Error('OpenRouter API key required. Add it in Settings.');
+    }
+    const openRouter = this.openRouterFactory(openRouterApiKey);
+    const searchTool = this.createSearchTool(settings.braveSearchApiKey);
     const history = await this.repo.getThreadMessages(stream.threadId);
     const systemPrompt = settings.systemPrompt?.trim();
     const memory = await this.options.memoryStore?.read();
@@ -535,7 +559,7 @@ ${firstMessage.slice(0, 500)}`;
 
     const start = Date.now();
     const { reasoning, maxTokens } = resolveThinkingConfig(model, stream.thinkingLevel ?? null);
-    const toolHandlers = this.getToolHandlers();
+    const toolHandlers = this.getToolHandlers(searchTool);
     const tools = toolHandlers.map((handler) => handler.definition);
     const maxToolIterations = this.options.maxToolIterations ?? 4;
 
@@ -593,7 +617,7 @@ ${firstMessage.slice(0, 500)}`;
     };
 
     while (iterations <= maxToolIterations) {
-      const result = await this.openRouter.streamChat(
+      const result = await openRouter.streamChat(
         {
           model: model.id,
           messages: openRouterMessages,
@@ -649,9 +673,6 @@ ${firstMessage.slice(0, 500)}`;
     const llmCost = calculateCost(promptTokens, completionTokens, model);
     const searchCost = searchCallCount * SEARCH_COST_PER_REQUEST;
     const cost = llmCost + searchCost;
-
-    // Deduct credits from user (cost is in dollars, credits are 1:1 with dollars)
-    await this.repo.deductCredits(userId, cost);
 
     // Update the assistant message with combined content
     let assistantMessage: MessageRecord;
@@ -713,7 +734,7 @@ ${firstMessage.slice(0, 500)}`;
     };
   }
 
-  private getToolHandlers(): Array<{
+  private getToolHandlers(searchTool?: SearchTool): Array<{
     name: string;
     definition: OpenRouterToolDefinition;
     run: (toolCall: OpenRouterToolCall) => Promise<string>;
@@ -748,11 +769,11 @@ ${firstMessage.slice(0, 500)}`;
     }
 
     // Search tool
-    if (this.options.searchTool) {
+    if (searchTool) {
       handlers.push({
         name: SEARCH_TOOL_NAME,
         definition: searchToolDefinition,
-        run: (toolCall) => this.options.searchTool!.runToolCall(toolCall),
+        run: (toolCall) => searchTool.runToolCall(toolCall),
       });
     }
 

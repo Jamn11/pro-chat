@@ -22,19 +22,20 @@ class MockOpenRouterClient extends OpenRouterClient {
 describe('ChatService', () => {
   it('streams and stores assistant message with cost', async () => {
     const repo = new InMemoryChatRepository();
-    const user = await repo.upsertUserFromClerk({ clerkId: 'test-clerk-id' });
+    const user = await repo.getOrCreateLocalUser('test-user');
     const model: ModelInfo = {
-      id: 'x-ai/grok-4.1-fast',
-      label: 'Grok 4.1 Fast',
-      inputCostPerToken: 0.0000002,
-      outputCostPerToken: 0.0000005,
+      id: 'openai/o3',
+      label: 'OpenAI: o3',
+      inputCostPerToken: 0.000002,
+      outputCostPerToken: 0.000008,
       supportsVision: false,
       supportsThinkingLevels: false,
     };
     await repo.upsertModels([model]);
     const thread = await repo.createThread({ userId: user.id });
+    await repo.updateSettings(user.id, { openRouterApiKey: 'test-key' });
 
-    const chatService = new ChatService(repo, new MockOpenRouterClient(), '/tmp');
+    const chatService = new ChatService(repo, () => new MockOpenRouterClient(), '/tmp');
 
     let streamed = '';
     const result = await chatService.sendMessageStream(
@@ -56,18 +57,19 @@ describe('ChatService', () => {
 
   it('rejects attachments from another thread', async () => {
     const repo = new InMemoryChatRepository();
-    const user = await repo.upsertUserFromClerk({ clerkId: 'test-clerk-id-2' });
+    const user = await repo.getOrCreateLocalUser('test-user-2');
     const model: ModelInfo = {
-      id: 'x-ai/grok-4.1-fast',
-      label: 'Grok 4.1 Fast',
-      inputCostPerToken: 0.0000002,
-      outputCostPerToken: 0.0000005,
+      id: 'openai/o3',
+      label: 'OpenAI: o3',
+      inputCostPerToken: 0.000002,
+      outputCostPerToken: 0.000008,
       supportsVision: false,
       supportsThinkingLevels: false,
     };
     await repo.upsertModels([model]);
     const thread = await repo.createThread({ userId: user.id });
     const otherThread = await repo.createThread({ userId: user.id });
+    await repo.updateSettings(user.id, { openRouterApiKey: 'test-key' });
     const attachment = await repo.createAttachment({
       threadId: otherThread.id,
       filename: 'file.txt',
@@ -77,7 +79,7 @@ describe('ChatService', () => {
       kind: 'file',
     });
 
-    const chatService = new ChatService(repo, new MockOpenRouterClient(), '/tmp');
+    const chatService = new ChatService(repo, () => new MockOpenRouterClient(), '/tmp');
 
     await expect(
       chatService.sendMessageStream(

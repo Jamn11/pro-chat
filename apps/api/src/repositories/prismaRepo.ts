@@ -1,10 +1,14 @@
-import { Prisma, PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import {
   ActiveStreamRecord,
   AttachmentRecord,
+  AttachmentKind,
+  ChatRole,
   MessageRecord,
   MessageSource,
   ModelInfo,
+  StreamStatus,
+  ThinkingLevel,
   ThreadRecord,
   ThreadSummary,
   TraceEvent,
@@ -16,10 +20,8 @@ import {
   CreateMessageInput,
   CreateThreadInput,
   CreateUsageRecordInput,
-  CreditsInfo,
   SettingsRecord,
   UserRecord,
-  UpsertUserFromClerkInput,
   UpdateActiveStreamInput,
   UsageRecord,
   UsageStats,
@@ -38,30 +40,21 @@ export class PrismaChatRepository implements ChatRepository {
     return this.prisma;
   }
 
-  // User management (Clerk integration)
-  async findUserByClerkId(clerkId: string): Promise<UserRecord | null> {
-    const user = await this.prisma.user.findUnique({
-      where: { clerkId },
+  // User management (local desktop)
+  async getOrCreateLocalUser(localUserKey: string): Promise<UserRecord> {
+    const existing = await this.prisma.user.findUnique({
+      where: { localUserKey },
     });
-    return user ? this.toUserRecord(user) : null;
-  }
+    if (existing) return this.toUserRecord(existing);
 
-  async upsertUserFromClerk(input: UpsertUserFromClerkInput): Promise<UserRecord> {
-    const user = await this.prisma.user.upsert({
-      where: { clerkId: input.clerkId },
-      update: {
-        email: input.email,
-        firstName: input.firstName,
-        lastName: input.lastName,
-        imageUrl: input.imageUrl,
-        lastSignInAt: new Date(),
-      },
-      create: {
-        clerkId: input.clerkId,
-        email: input.email,
-        firstName: input.firstName,
-        lastName: input.lastName,
-        imageUrl: input.imageUrl,
+    const fallback = await this.prisma.user.findFirst({
+      orderBy: { updatedAt: 'desc' },
+    });
+    if (fallback) return this.toUserRecord(fallback);
+
+    const user = await this.prisma.user.create({
+      data: {
+        localUserKey,
         lastSignInAt: new Date(),
       },
     });
@@ -70,26 +63,23 @@ export class PrismaChatRepository implements ChatRepository {
 
   private toUserRecord(user: {
     id: string;
-    clerkId: string;
+    localUserKey: string | null;
     email: string | null;
     firstName: string | null;
     lastName: string | null;
     imageUrl: string | null;
     systemPrompt: string | null;
-    credits: number;
     createdAt: Date;
     updatedAt: Date;
     lastSignInAt: Date | null;
   }): UserRecord {
     return {
       id: user.id,
-      clerkId: user.clerkId,
       email: user.email,
       firstName: user.firstName,
       lastName: user.lastName,
       imageUrl: user.imageUrl,
       systemPrompt: user.systemPrompt,
-      credits: user.credits,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
       lastSignInAt: user.lastSignInAt,
@@ -101,12 +91,13 @@ export class PrismaChatRepository implements ChatRepository {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     return {
       systemPrompt: user?.systemPrompt ?? null,
+      openRouterApiKey: user?.openRouterApiKey ?? null,
+      braveSearchApiKey: user?.braveSearchApiKey ?? null,
       defaultModelId: user?.defaultModelId ?? null,
       defaultThinkingLevel: user?.defaultThinkingLevel ?? null,
-      enabledModelIds: user?.enabledModelIds ?? [],
-      enabledTools: user?.enabledTools ?? ['web_search', 'code_interpreter', 'memory'],
+      enabledModelIds: parseStringArray(user?.enabledModelIds, []),
+      enabledTools: parseStringArray(user?.enabledTools, ['web_search', 'code_interpreter', 'memory']),
       hideCostPerMessage: user?.hideCostPerMessage ?? false,
-      notifications: user?.notifications ?? true,
       fontFamily: user?.fontFamily ?? 'Space Mono',
       fontSize: user?.fontSize ?? 'medium',
     };
@@ -116,12 +107,17 @@ export class PrismaChatRepository implements ChatRepository {
     // Build update data object with only defined fields
     const updateData: Record<string, unknown> = {};
     if (settings.systemPrompt !== undefined) updateData.systemPrompt = settings.systemPrompt;
+    if (settings.openRouterApiKey !== undefined) updateData.openRouterApiKey = settings.openRouterApiKey;
+    if (settings.braveSearchApiKey !== undefined) updateData.braveSearchApiKey = settings.braveSearchApiKey;
     if (settings.defaultModelId !== undefined) updateData.defaultModelId = settings.defaultModelId;
     if (settings.defaultThinkingLevel !== undefined) updateData.defaultThinkingLevel = settings.defaultThinkingLevel;
-    if (settings.enabledModelIds !== undefined) updateData.enabledModelIds = settings.enabledModelIds;
-    if (settings.enabledTools !== undefined) updateData.enabledTools = settings.enabledTools;
+    if (settings.enabledModelIds !== undefined) {
+      updateData.enabledModelIds = serializeJson(settings.enabledModelIds);
+    }
+    if (settings.enabledTools !== undefined) {
+      updateData.enabledTools = serializeJson(settings.enabledTools);
+    }
     if (settings.hideCostPerMessage !== undefined) updateData.hideCostPerMessage = settings.hideCostPerMessage;
-    if (settings.notifications !== undefined) updateData.notifications = settings.notifications;
     if (settings.fontFamily !== undefined) updateData.fontFamily = settings.fontFamily;
     if (settings.fontSize !== undefined) updateData.fontSize = settings.fontSize;
 
@@ -133,24 +129,6 @@ export class PrismaChatRepository implements ChatRepository {
     }
 
     return this.getSettings(userId);
-  }
-
-  // Credits methods
-  async getCredits(userId: string): Promise<CreditsInfo> {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    return {
-      credits: user?.credits ?? 10.0,
-    };
-  }
-
-  async deductCredits(userId: string, amount: number): Promise<CreditsInfo> {
-    const user = await this.prisma.user.update({
-      where: { id: userId },
-      data: { credits: { decrement: amount } },
-    });
-    return {
-      credits: user.credits,
-    };
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -323,10 +301,10 @@ export class PrismaChatRepository implements ChatRepository {
     return messages.map((message) => ({
       id: message.id,
       threadId: message.threadId,
-      role: message.role,
+      role: parseChatRole(message.role),
       content: message.content,
       modelId: message.modelId,
-      thinkingLevel: message.thinkingLevel,
+      thinkingLevel: parseThinkingLevel(message.thinkingLevel),
       createdAt: message.createdAt,
       durationMs: message.durationMs,
       promptTokens: message.promptTokens,
@@ -342,7 +320,7 @@ export class PrismaChatRepository implements ChatRepository {
         path: attachment.path,
         mimeType: attachment.mimeType,
         size: attachment.size,
-        kind: attachment.kind,
+        kind: parseAttachmentKind(attachment.kind),
         createdAt: attachment.createdAt,
       })),
     }));
@@ -360,17 +338,17 @@ export class PrismaChatRepository implements ChatRepository {
         promptTokens: input.promptTokens ?? null,
         completionTokens: input.completionTokens ?? null,
         cost: input.cost ?? 0,
-        trace: input.trace ?? undefined,
-        sources: input.sources ?? undefined,
+        trace: serializeJsonOrNull(input.trace),
+        sources: serializeJsonOrNull(input.sources),
       },
     });
     return {
       id: message.id,
       threadId: message.threadId,
-      role: message.role,
+      role: parseChatRole(message.role),
       content: message.content,
       modelId: message.modelId,
-      thinkingLevel: message.thinkingLevel,
+      thinkingLevel: parseThinkingLevel(message.thinkingLevel),
       createdAt: message.createdAt,
       durationMs: message.durationMs,
       promptTokens: message.promptTokens,
@@ -392,17 +370,17 @@ export class PrismaChatRepository implements ChatRepository {
         promptTokens: data.promptTokens ?? undefined,
         completionTokens: data.completionTokens ?? undefined,
         cost: data.cost ?? undefined,
-        trace: data.trace === undefined ? undefined : data.trace ?? Prisma.DbNull,
-        sources: data.sources === undefined ? undefined : data.sources ?? Prisma.DbNull,
+        trace: data.trace === undefined ? undefined : serializeJsonOrNull(data.trace),
+        sources: data.sources === undefined ? undefined : serializeJsonOrNull(data.sources),
       },
     });
     return {
       id: message.id,
       threadId: message.threadId,
-      role: message.role,
+      role: parseChatRole(message.role),
       content: message.content,
       modelId: message.modelId,
-      thinkingLevel: message.thinkingLevel,
+      thinkingLevel: parseThinkingLevel(message.thinkingLevel),
       createdAt: message.createdAt,
       durationMs: message.durationMs,
       promptTokens: message.promptTokens,
@@ -416,7 +394,7 @@ export class PrismaChatRepository implements ChatRepository {
   async pruneMessageArtifacts(before: Date): Promise<number> {
     const result = await this.prisma.message.updateMany({
       where: { createdAt: { lt: before } },
-      data: { trace: Prisma.DbNull, sources: Prisma.DbNull },
+      data: { trace: null, sources: null },
     });
     return result.count;
   }
@@ -448,7 +426,7 @@ export class PrismaChatRepository implements ChatRepository {
       path: attachment.path,
       mimeType: attachment.mimeType,
       size: attachment.size,
-      kind: attachment.kind,
+      kind: parseAttachmentKind(attachment.kind),
       createdAt: attachment.createdAt,
     };
   }
@@ -474,7 +452,7 @@ export class PrismaChatRepository implements ChatRepository {
       path: attachment.path,
       mimeType: attachment.mimeType,
       size: attachment.size,
-      kind: attachment.kind,
+      kind: parseAttachmentKind(attachment.kind),
       createdAt: attachment.createdAt,
     }));
   }
@@ -491,7 +469,7 @@ export class PrismaChatRepository implements ChatRepository {
       path: attachment.path,
       mimeType: attachment.mimeType,
       size: attachment.size,
-      kind: attachment.kind,
+      kind: parseAttachmentKind(attachment.kind),
       createdAt: attachment.createdAt,
     }));
   }
@@ -547,11 +525,11 @@ export class PrismaChatRepository implements ChatRepository {
       threadId: stream.threadId,
       userMessageId: stream.userMessageId,
       assistantMessageId: stream.assistantMessageId,
-      status: stream.status,
+      status: parseStreamStatus(stream.status),
       partialContent: stream.partialContent,
       partialTrace: parseTrace(stream.partialTrace),
       modelId: stream.modelId,
-      thinkingLevel: stream.thinkingLevel,
+      thinkingLevel: parseThinkingLevel(stream.thinkingLevel),
       startedAt: stream.startedAt,
       lastActivityAt: stream.lastActivityAt,
       completedAt: stream.completedAt,
@@ -568,11 +546,11 @@ export class PrismaChatRepository implements ChatRepository {
       threadId: stream.threadId,
       userMessageId: stream.userMessageId,
       assistantMessageId: stream.assistantMessageId,
-      status: stream.status,
+      status: parseStreamStatus(stream.status),
       partialContent: stream.partialContent,
       partialTrace: parseTrace(stream.partialTrace),
       modelId: stream.modelId,
-      thinkingLevel: stream.thinkingLevel,
+      thinkingLevel: parseThinkingLevel(stream.thinkingLevel),
       startedAt: stream.startedAt,
       lastActivityAt: stream.lastActivityAt,
       completedAt: stream.completedAt,
@@ -593,11 +571,11 @@ export class PrismaChatRepository implements ChatRepository {
       threadId: stream.threadId,
       userMessageId: stream.userMessageId,
       assistantMessageId: stream.assistantMessageId,
-      status: stream.status,
+      status: parseStreamStatus(stream.status),
       partialContent: stream.partialContent,
       partialTrace: parseTrace(stream.partialTrace),
       modelId: stream.modelId,
-      thinkingLevel: stream.thinkingLevel,
+      thinkingLevel: parseThinkingLevel(stream.thinkingLevel),
       startedAt: stream.startedAt,
       lastActivityAt: stream.lastActivityAt,
       completedAt: stream.completedAt,
@@ -611,7 +589,7 @@ export class PrismaChatRepository implements ChatRepository {
         assistantMessageId: data.assistantMessageId ?? undefined,
         status: data.status ?? undefined,
         partialContent: data.partialContent ?? undefined,
-        partialTrace: data.partialTrace === undefined ? undefined : data.partialTrace ?? Prisma.DbNull,
+        partialTrace: data.partialTrace === undefined ? undefined : serializeJsonOrNull(data.partialTrace),
         lastActivityAt: data.lastActivityAt ?? undefined,
         completedAt: data.completedAt ?? undefined,
       },
@@ -621,11 +599,11 @@ export class PrismaChatRepository implements ChatRepository {
       threadId: stream.threadId,
       userMessageId: stream.userMessageId,
       assistantMessageId: stream.assistantMessageId,
-      status: stream.status,
+      status: parseStreamStatus(stream.status),
       partialContent: stream.partialContent,
       partialTrace: parseTrace(stream.partialTrace),
       modelId: stream.modelId,
-      thinkingLevel: stream.thinkingLevel,
+      thinkingLevel: parseThinkingLevel(stream.thinkingLevel),
       startedAt: stream.startedAt,
       lastActivityAt: stream.lastActivityAt,
       completedAt: stream.completedAt,
@@ -650,11 +628,11 @@ export class PrismaChatRepository implements ChatRepository {
       threadId: stream.threadId,
       userMessageId: stream.userMessageId,
       assistantMessageId: stream.assistantMessageId,
-      status: stream.status,
+      status: parseStreamStatus(stream.status),
       partialContent: stream.partialContent,
       partialTrace: parseTrace(stream.partialTrace),
       modelId: stream.modelId,
-      thinkingLevel: stream.thinkingLevel,
+      thinkingLevel: parseThinkingLevel(stream.thinkingLevel),
       startedAt: stream.startedAt,
       lastActivityAt: stream.lastActivityAt,
       completedAt: stream.completedAt,
@@ -672,14 +650,56 @@ export class PrismaChatRepository implements ChatRepository {
   }
 }
 
-const parseTrace = (value: unknown): TraceEvent[] | null => {
+const parseTrace = (value: unknown): TraceEvent[] | null => parseJsonArray<TraceEvent>(value);
+
+const parseSources = (value: unknown): MessageSource[] | null => parseJsonArray<MessageSource>(value);
+
+const parseStringArray = (value: unknown, fallback: string[]): string[] => {
+  const parsed = parseJsonArray<string>(value);
+  return parsed ?? fallback;
+};
+
+const parseChatRole = (value: string): ChatRole => (isChatRole(value) ? value : 'user');
+
+const parseThinkingLevel = (value: string | null): ThinkingLevel | null =>
+  value && isThinkingLevel(value) ? value : null;
+
+const parseAttachmentKind = (value: string): AttachmentKind => (isAttachmentKind(value) ? value : 'file');
+
+const parseStreamStatus = (value: string): StreamStatus => (isStreamStatus(value) ? value : 'failed');
+
+const isChatRole = (value: string): value is ChatRole =>
+  value === 'user' || value === 'assistant' || value === 'system';
+
+const isThinkingLevel = (value: string): value is ThinkingLevel =>
+  value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh';
+
+const isAttachmentKind = (value: string): value is AttachmentKind => value === 'image' || value === 'file';
+
+const isStreamStatus = (value: string): value is StreamStatus =>
+  value === 'active' ||
+  value === 'pending' ||
+  value === 'completed' ||
+  value === 'failed' ||
+  value === 'cancelled';
+
+const parseJsonArray = <T>(value: unknown): T[] | null => {
   if (!value) return null;
-  if (Array.isArray(value)) return value as TraceEvent[];
+  if (Array.isArray(value)) return value as T[];
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? (parsed as T[]) : null;
+    } catch {
+      return null;
+    }
+  }
   return null;
 };
 
-const parseSources = (value: unknown): MessageSource[] | null => {
-  if (!value) return null;
-  if (Array.isArray(value)) return value as MessageSource[];
-  return null;
+const serializeJson = (value: unknown): string => JSON.stringify(value);
+
+const serializeJsonOrNull = (value: unknown): string | null => {
+  if (value === null || value === undefined) return null;
+  return JSON.stringify(value);
 };

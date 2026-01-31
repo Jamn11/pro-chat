@@ -18,19 +18,19 @@ vi.mock('./api', () => ({
   fetchModels: vi.fn(async () => [
     {
       id: 'anthropic/claude-sonnet-4.5',
-      label: 'Claude Sonnet 4.5',
+      label: 'Anthropic: Claude Sonnet 4.5',
       supportsVision: false,
       supportsThinkingLevels: true,
     },
     {
       id: 'openai/gpt-5.2',
-      label: 'GPT-5.2',
+      label: 'OpenAI: GPT-5.2',
       supportsVision: false,
       supportsThinkingLevels: true,
     },
     {
-      id: 'x-ai/grok-4.1-fast',
-      label: 'Grok 4.1 Fast',
+      id: 'openai/o3',
+      label: 'OpenAI: o3',
       supportsVision: false,
       supportsThinkingLevels: true,
     },
@@ -43,13 +43,24 @@ vi.mock('./api', () => ({
       totalCost: 0,
     },
   ]),
-  fetchSettings: vi.fn(async () => ({ systemPrompt: '' })),
+  fetchSettings: vi.fn(async () => ({ systemPrompt: '', openRouterApiKey: null, braveSearchApiKey: null })),
+  fetchUsageStats: vi.fn(async () => ({
+    totalCost: 0,
+    totalMessages: 0,
+    totalThreads: 0,
+    costByModel: {},
+    messagesByModel: {},
+    dailyStats: [],
+  })),
   fetchMemory: vi.fn(async () => ({ content: '' })),
   fetchMessages: vi.fn(async () => []),
   createThread,
   deleteThread: vi.fn(async () => {}),
-  updateSettings: vi.fn(async () => ({ systemPrompt: '' })),
+  updateSettings: vi.fn(async () => ({ systemPrompt: '', openRouterApiKey: null, braveSearchApiKey: null })),
   updateMemory: vi.fn(async () => ({ content: '' })),
+  checkActiveStream: vi.fn(async () => ({ hasActiveStream: false, stream: null })),
+  resumeStream: vi.fn(async () => {}),
+  cancelActiveStream: vi.fn(async () => ({ cancelled: true })),
   triggerMemoryExtraction: vi.fn(async () => ({ processed: 0, memoriesAdded: 0, skipped: 0, errors: 0 })),
   uploadFiles: vi.fn(async () => []),
   streamChat,
@@ -68,8 +79,8 @@ describe('App', () => {
     });
 
     expect(screen.getByRole('button', { name: /new chat/i })).toBeTruthy();
-    expect(screen.getByRole('option', { name: /grok 4.1 fast/i })).toBeTruthy();
-    expect(screen.getByRole('option', { name: /claude sonnet 4.5/i })).toBeTruthy();
+    expect(screen.getByRole('option', { name: /openai: o3/i })).toBeTruthy();
+    expect(screen.getByRole('option', { name: /anthropic: claude sonnet 4.5/i })).toBeTruthy();
   });
 
   it('shows Claude thinking budgets', async () => {
@@ -94,11 +105,11 @@ describe('App', () => {
     });
 
     const input = screen.getByPlaceholderText('Type your message...');
-    await user.type(input, '/grok');
+    await user.type(input, '/o3');
     await user.keyboard('{Enter}');
 
     const modelSelect = screen.getByLabelText('Model selector') as HTMLSelectElement;
-    expect(modelSelect.value).toBe('x-ai/grok-4.1-fast');
+    expect(modelSelect.value).toBe('openai/o3');
     expect((input as HTMLTextAreaElement).value).toBe('');
   });
 
@@ -141,7 +152,7 @@ describe('App', () => {
           id: 'user-1',
           role: 'user',
           content: 'Hello there',
-          modelId: 'anthropic/claude-sonnet-4.5',
+          modelId: 'openai/o3',
           thinkingLevel: null,
           createdAt: new Date().toISOString(),
           attachments: [],
@@ -150,7 +161,7 @@ describe('App', () => {
           id: 'assistant-1',
           role: 'assistant',
           content: 'Hi!',
-          modelId: 'anthropic/claude-sonnet-4.5',
+          modelId: 'openai/o3',
           thinkingLevel: null,
           createdAt: new Date().toISOString(),
           durationMs: 0,

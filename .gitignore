@@ -1,7 +1,16 @@
 node_modules
+.env
+.env.*
+!.env.example
 .env.local
 .DS_Store
+*.tsbuildinfo
 apps/*/dist
 apps/*/build
+apps/*/data
+apps/*/storage
+apps/api/prisma/data
+apps/web/src-tauri/bin
+apps/web/src-tauri/target
 coverage
 .worktrees

@@ -8,17 +8,11 @@ dotenv.config({ path: path.resolve(process.cwd(), '../../.env') });
 const envSchema = z.object({
   NODE_ENV: z.string().optional(),
   PORT: z.coerce.number().default(8787),
-  OPENROUTER_API_KEY: z.string().min(1),
   OPENROUTER_APP_URL: z.string().optional(),
   OPENROUTER_APP_NAME: z.string().optional(),
   DATABASE_URL: z.string().min(1),
-  // Clerk authentication
-  CLERK_PUBLISHABLE_KEY: z.string().min(1),
-  CLERK_SECRET_KEY: z.string().min(1),
   STORAGE_PATH: z.string().default('storage'),
   MEMORY_PATH: z.string().optional(),
-  // Search tool
-  BRAVE_SEARCH_API_KEY: z.string().min(1).optional(),
   // Web fetch tool
   WEB_FETCH_ALLOW_DOMAINS: z.string().optional(),
   WEB_FETCH_DENY_DOMAINS: z.string().optional(),
@@ -39,15 +33,11 @@ const envSchema = z.object({
 export const env = envSchema.parse({
   NODE_ENV: process.env.NODE_ENV,
   PORT: process.env.PORT,
-  OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
   OPENROUTER_APP_URL: process.env.OPENROUTER_APP_URL,
   OPENROUTER_APP_NAME: process.env.OPENROUTER_APP_NAME,
   DATABASE_URL: process.env.DATABASE_URL,
-  CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY,
-  CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
   STORAGE_PATH: process.env.STORAGE_PATH,
   MEMORY_PATH: process.env.MEMORY_PATH,
-  BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY,
   WEB_FETCH_ALLOW_DOMAINS: process.env.WEB_FETCH_ALLOW_DOMAINS,
   WEB_FETCH_DENY_DOMAINS: process.env.WEB_FETCH_DENY_DOMAINS,
   WEB_FETCH_MAX_REDIRECTS: process.env.WEB_FETCH_MAX_REDIRECTS,
