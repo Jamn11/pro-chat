@@ -1,8 +1,8 @@
 .app {
   display: grid;
   grid-template-columns: 280px 1fr;
-  min-height: calc(100vh / var(--ui-scale));
-  height: calc(100vh / var(--ui-scale));
+  min-height: calc(100% / var(--ui-scale));
+  height: calc(100% / var(--ui-scale));
   gap: 0;
   overflow: hidden;
   position: relative;
@@ -25,7 +25,7 @@
   gap: 20px;
   box-shadow: var(--shadow);
   z-index: 2;
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
   transition: width 0.2s ease, padding 0.2s ease, opacity 0.2s ease;
   width: 100%;
@@ -180,7 +180,7 @@
   grid-template-rows: auto 1fr auto;
   gap: 16px;
   padding: 24px 32px;
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
   position: relative;
   --chat-text-size: 1rem;

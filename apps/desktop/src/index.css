@@ -35,13 +35,19 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
   margin: 0;
   font-family: 'Space Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
     'Courier New', monospace;
   background: var(--bg-gradient);
   color: var(--text);
-  min-height: 100vh;
+  min-height: 100%;
   overflow: hidden;
 }
 
@@ -53,6 +59,5 @@ input {
 }
 
 #root {
-  min-height: 100vh;
-  height: 100vh;
+  min-height: 100%;
 }
